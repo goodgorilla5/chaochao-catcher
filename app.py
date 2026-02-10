@@ -50,9 +50,9 @@ picked_date = st.date_input("📅 選擇查詢日期", datetime.now())
 roc_year = picked_date.year - 1911
 file_name = f"{roc_year}{picked_date.strftime('%m%d')}.SCP"
 
-# 構建 GitHub 檔案網址 (加入時間戳防止快取)
+# --- 核心修正處：更換為 chaochao-catcher 倉庫 ---
 timestamp = int(time.time())
-RAW_URL = f"https://raw.githubusercontent.com/goodgorilla5/chaochao-helper/main/{file_name}?t={timestamp}"
+RAW_URL = f"https://raw.githubusercontent.com/goodgorilla5/chaochao-catcher/main/{file_name}?t={timestamp}"
 
 @st.cache_data(ttl=60)
 def fetch_data(url):
