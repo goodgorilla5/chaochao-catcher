@@ -18,7 +18,7 @@ except:
     st.error("❌ 請檢查 Streamlit Secrets 中的 github_token")
     st.stop()
 
-# --- 核心解析邏輯 (完全沿用您最信任的邏輯) ---
+# --- 核心解析邏輯 (保留您最信任的邏輯) ---
 def process_logic(content):
     raw_lines = content.split('    ')
     rows = []
@@ -31,9 +31,7 @@ def process_logic(content):
                 date_match = re.search(r"(\d{7,8}1)\s+\d{2}S00076", line)
                 if date_match:
                     date_pos = date_match.start()
-                    # 抓取日期字串並格式化
                     raw_date_str = date_match.group(1)[:7]
-                    formatted_date = f"{raw_date_str[:3]}/{raw_date_str[3:5]}/{raw_date_str[5:7]}"
                     
                     # 合併流水號空格
                     serial = line[:date_pos].strip().replace(" ", "")
@@ -47,12 +45,11 @@ def process_logic(content):
                     pieces = int(nums[0][-3:].replace(" ", "") or 0)
                     weight = int(nums[1].replace(" ", "") or 0)
                     price_raw = nums[2].strip().split(' ')[0]
-                    # 處理單價（移除最後一位可能是校驗碼或空格的字元）
                     price = int(price_raw[:-1] if price_raw else 0)
                     buyer = nums[5].strip()[:4] if len(nums) > 5 else ""
 
                     rows.append({
-                        "日期": formatted_date,
+                        "日期": raw_date_str, # 暫存 1150210
                         "流水號": serial, 
                         "等級": level, 
                         "小代": sub_id, 
@@ -64,8 +61,7 @@ def process_logic(content):
             except: continue
     return rows
 
-# --- 自動讀取 GitHub 所有 SCP 檔案 ---
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60) # 縮短快取時間，方便偵測新上傳的 1150101T.SCP
 def fetch_all_github_data():
     all_data = []
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
@@ -73,7 +69,7 @@ def fetch_all_github_data():
         r = requests.get(API_URL, headers=headers)
         if r.status_code != 200: return pd.DataFrame()
         
-        # 找出所有 SCP 結尾的檔案
+        # 只要是 .SCP 結尾就讀取，不管中間有沒有 T
         files = [f for f in r.json() if f['name'].upper().endswith('.SCP')]
         
         def download_and_parse(file_info):
@@ -83,7 +79,6 @@ def fetch_all_github_data():
                 return process_logic(content)
             return []
 
-        # 並行下載以提高速度
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             results = list(executor.map(download_and_parse, files))
         
@@ -92,10 +87,11 @@ def fetch_all_github_data():
             
         df = pd.DataFrame(all_data)
         if not df.empty:
-            # --- 關鍵功能：剔除重複流水號 ---
             df = df.drop_duplicates(subset="流水號", keep='first')
-            # 轉換日期格式以便排序
-            df['date_obj'] = pd.to_datetime(df['日期'].apply(lambda x: str(int(x.split('/')[0])+1911)+x[3:].replace('/','')), format='%Y%m%d')
+            # 轉換為日期物件方便過濾
+            df['date_obj'] = pd.to_datetime(df['日期'].apply(lambda x: str(int(x[:3])+1911)+x[3:]), format='%Y%m%d')
+            # 格式化顯示用日期
+            df['顯示日期'] = df['日期'].apply(lambda x: f"{x[:3]}/{x[3:5]}/{x[5:7]}")
             df = df.sort_values(by="date_obj", ascending=False)
         return df
     except:
@@ -109,45 +105,39 @@ df = fetch_all_github_data()
 if not df.empty:
     st.sidebar.header("🗓️ 查詢範圍設定")
     
-    # --- 新增功能：日期區間搜尋 ---
-    min_date = df['date_obj'].min()
-    max_date = df['date_obj'].max()
+    min_d = df['date_obj'].min().date()
+    max_d = df['date_obj'].max().date() # 這是目前資料庫裡最晚的一天
     
+    # 【功能實現】預設日期區間為「資料庫最新的一天」到「資料庫最新的一天」
+    # 這樣一進網頁就會看到最新日期的資料
     date_range = st.sidebar.date_input(
         "選擇行情日期區間",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date
+        value=(max_d, max_d), 
+        min_value=min_d,
+        max_value=max_d
     )
 
     st.sidebar.divider()
-    search_sub = st.sidebar.text_input("🔍 搜尋小代 (如 627)")
-    show_serial = st.sidebar.checkbox("顯示原始流水號", value=False)
+    search_sub = st.sidebar.text_input("🔍 搜尋小代")
+    show_serial = st.sidebar.checkbox("顯示流水號", value=False)
 
     # 過濾邏輯
-    if len(date_range) == 2:
-        start_date, end_date = date_range
-        mask = (df['date_obj'].dt.date >= start_date) & (df['date_obj'].dt.date <= end_date)
-        f_df = df.loc[mask].copy()
-    else:
-        f_df = df.copy()
-
+    f_df = df.copy()
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_d, end_d = date_range
+        f_df = f_df[(f_df['date_obj'].dt.date >= start_d) & (f_df['date_obj'].dt.date <= end_d)]
+    
     if search_sub:
         f_df = f_df[f_df['小代'].str.contains(search_sub)]
 
-    # 統計資訊
     c1, c2, c3 = st.columns(3)
-    c1.metric("所選區間總件數", f"{f_df['件數'].sum()} 件")
-    c2.metric("區間最高單價", f"{f_df['單價'].max()} 元")
-    c3.metric("資料筆數 (已去重)", f"{len(f_df)} 筆")
+    c1.metric("件數總計", f"{f_df['件數'].sum()} 件")
+    c2.metric("區間最高價", f"{f_df['單價'].max()} 元")
+    c3.metric("資料筆數", f"{len(f_df)} 筆")
 
-    # 顯示表格
-    display_cols = ["日期", "等級", "小代", "件數", "公斤", "單價", "買家"]
-    if show_serial:
-        display_cols.insert(1, "流水號")
+    display_cols = ["顯示日期", "等級", "小代", "件數", "公斤", "單價", "買家"]
+    if show_serial: display_cols.insert(1, "流水號")
     
-    st.dataframe(f_df[display_cols], use_container_width=True, height=600)
-
+    st.dataframe(f_df[display_cols].rename(columns={"顯示日期":"日期"}), use_container_width=True, height=600)
 else:
-    st.warning("😭 目前雲端倉庫中沒有可讀取的 SCP 檔案。")
-    st.info("請確認 GitHub 倉庫 goodgorilla5/chaochao-catcher 中已有上傳 SCP 檔。")
+    st.warning("😭 找不到任何 .SCP 檔案，請檢查 GitHub 倉庫。")
