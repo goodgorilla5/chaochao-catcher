@@ -2,27 +2,40 @@ import streamlit as st
 import pandas as pd
 import re
 import requests
-import time
+import concurrent.futures
 from datetime import datetime
 
-st.set_page_config(page_title="燕巢台北市場助手", layout="wide")
+st.set_page_config(page_title="燕巢台北行情大數據庫", layout="wide")
 
-# --- 核心解析邏輯 (恢復您最信任的日期錨點與空格合併) ---
+# --- 設定區 ---
+REPO_OWNER = "goodgorilla5"
+REPO_NAME = "chaochao-catcher"
+API_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/"
+
+try:
+    GITHUB_TOKEN = st.secrets["github_token"]
+except:
+    st.error("❌ 請檢查 Streamlit Secrets 中的 github_token")
+    st.stop()
+
+# --- 核心解析邏輯 (完全沿用您最信任的邏輯) ---
 def process_logic(content):
-    # 這裡保留 split('    ') 四個空格的邏輯
     raw_lines = content.split('    ')
-    final_rows = []
+    rows = []
     grade_map = {"1": "特", "2": "優", "3": "良"}
     
     for line in raw_lines:
         if "F22" in line and "S00076" in line:
             try:
-                # 尋找日期錨點 (如 11502091)
-                # 使用您程式中原本的正則表達式，這是最準確的
+                # 您的原始精準定位邏輯
                 date_match = re.search(r"(\d{7,8}1)\s+\d{2}S00076", line)
                 if date_match:
                     date_pos = date_match.start()
-                    # 合併流水號空格：將日期前方的字串去除多餘空白
+                    # 抓取日期字串並格式化
+                    raw_date_str = date_match.group(1)[:7]
+                    formatted_date = f"{raw_date_str[:3]}/{raw_date_str[3:5]}/{raw_date_str[5:7]}"
+                    
+                    # 合併流水號空格
                     serial = line[:date_pos].strip().replace(" ", "")
                     
                     remaining = line[date_pos:]
@@ -34,13 +47,12 @@ def process_logic(content):
                     pieces = int(nums[0][-3:].replace(" ", "") or 0)
                     weight = int(nums[1].replace(" ", "") or 0)
                     price_raw = nums[2].strip().split(' ')[0]
-                    # 原本邏輯：取最後一位之前的數字
+                    # 處理單價（移除最後一位可能是校驗碼或空格的字元）
                     price = int(price_raw[:-1] if price_raw else 0)
-                    
-                    # 買家欄位 (nums[5])
-                    buyer = nums[5].strip()[:4] if len(nums) > 5 else "未知"
+                    buyer = nums[5].strip()[:4] if len(nums) > 5 else ""
 
-                    final_rows.append({
+                    rows.append({
+                        "日期": formatted_date,
                         "流水號": serial, 
                         "等級": level, 
                         "小代": sub_id, 
@@ -49,84 +61,93 @@ def process_logic(content):
                         "單價": price, 
                         "買家": buyer
                     })
-            except: 
-                continue
-                
-    # --- 關鍵修正：剔除重複流水號資料 ---
-    if final_rows:
-        df_temp = pd.DataFrame(final_rows)
-        # 只顯示一個相同流水號的資料，保留第一筆
-        df_temp = df_temp.drop_duplicates(subset="流水號", keep="first")
-        return df_temp.to_dict('records')
-    
-    return final_rows
+            except: continue
+    return rows
 
-st.title("🍎 燕巢-台北行情查詢")
-
-# --- 日期選擇區 ---
-picked_date = st.date_input("📅 選擇查詢日期", datetime.now())
-roc_year = picked_date.year - 1911
-file_name = f"{roc_year}{picked_date.strftime('%m%d')}.SCP"
-
-# --- 倉庫路徑 ---
-timestamp = int(time.time())
-RAW_URL = f"https://raw.githubusercontent.com/goodgorilla5/chaochao-catcher/main/{file_name}?t={timestamp}"
-
-@st.cache_data(ttl=60)
-def fetch_data(url):
+# --- 自動讀取 GitHub 所有 SCP 檔案 ---
+@st.cache_data(ttl=300)
+def fetch_all_github_data():
+    all_data = []
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
     try:
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            return r.content.decode("big5", errors="ignore")
-    except: return None
-    return None
-
-content = fetch_data(RAW_URL)
-
-# --- 顯示與操作區 ---
-if content:
-    st.success(f"✅ 已載入 {file_name} 行情資料")
-    data = process_logic(content)
-    if data:
-        df = pd.DataFrame(data)
-        st.divider()
+        r = requests.get(API_URL, headers=headers)
+        if r.status_code != 200: return pd.DataFrame()
         
-        c1, c2, c3 = st.columns([1, 1, 1])
-        with c1:
-            search_query = st.text_input("🔍 搜尋小代", placeholder="輸入如 627")
-        with c2:
-            sort_order = st.selectbox("排序價格", ["-- 選擇排序 --", "價格：由高至低", "價格：由低至高"])
-        with c3:
-            show_serial = st.checkbox("顯示流水號", value=False)
-
-        if search_query:
-            df = df[df['小代'].str.contains(search_query)]
+        # 找出所有 SCP 結尾的檔案
+        files = [f for f in r.json() if f['name'].upper().endswith('.SCP')]
         
-        if sort_order == "價格：由高至低":
-            df = df.sort_values(by="單價", ascending=False)
-        elif sort_order == "價格：由低至高":
-            df = df.sort_values(by="單價", ascending=True)
+        def download_and_parse(file_info):
+            res = requests.get(file_info['download_url'], headers=headers)
+            if res.status_code == 200:
+                content = res.content.decode("big5", errors="ignore")
+                return process_logic(content)
+            return []
 
-        display_cols = ["等級", "小代", "件數", "公斤", "單價", "買家"]
-        if show_serial:
-            display_cols.insert(0, "流水號")
-
-        st.dataframe(
-            df[display_cols], 
-            use_container_width=True, 
-            height=600,
-            column_config={"單價": st.column_config.NumberColumn("單價", format="%d 元")}
-        )
+        # 並行下載以提高速度
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(download_and_parse, files))
         
-        st.metric(f"{file_name} 總件數", f"{df['件數'].sum()} 件")
+        for r_list in results:
+            all_data.extend(r_list)
+            
+        df = pd.DataFrame(all_data)
+        if not df.empty:
+            # --- 關鍵功能：剔除重複流水號 ---
+            df = df.drop_duplicates(subset="流水號", keep='first')
+            # 轉換日期格式以便排序
+            df['date_obj'] = pd.to_datetime(df['日期'].apply(lambda x: str(int(x.split('/')[0])+1911)+x[3:].replace('/','')), format='%Y%m%d')
+            df = df.sort_values(by="date_obj", ascending=False)
+        return df
+    except:
+        return pd.DataFrame()
+
+# --- 主畫面 ---
+st.title("📊 燕巢-台北行情大數據庫")
+
+df = fetch_all_github_data()
+
+if not df.empty:
+    st.sidebar.header("🗓️ 查詢範圍設定")
+    
+    # --- 新增功能：日期區間搜尋 ---
+    min_date = df['date_obj'].min()
+    max_date = df['date_obj'].max()
+    
+    date_range = st.sidebar.date_input(
+        "選擇行情日期區間",
+        value=(min_date, max_date),
+        min_value=min_date,
+        max_value=max_date
+    )
+
+    st.sidebar.divider()
+    search_sub = st.sidebar.text_input("🔍 搜尋小代 (如 627)")
+    show_serial = st.sidebar.checkbox("顯示原始流水號", value=False)
+
+    # 過濾邏輯
+    if len(date_range) == 2:
+        start_date, end_date = date_range
+        mask = (df['date_obj'].dt.date >= start_date) & (df['date_obj'].dt.date <= end_date)
+        f_df = df.loc[mask].copy()
     else:
-        st.info("查無符合 F22 芭樂的行情資料。")
+        f_df = df.copy()
+
+    if search_sub:
+        f_df = f_df[f_df['小代'].str.contains(search_sub)]
+
+    # 統計資訊
+    c1, c2, c3 = st.columns(3)
+    c1.metric("所選區間總件數", f"{f_df['件數'].sum()} 件")
+    c2.metric("區間最高單價", f"{f_df['單價'].max()} 元")
+    c3.metric("資料筆數 (已去重)", f"{len(f_df)} 筆")
+
+    # 顯示表格
+    display_cols = ["日期", "等級", "小代", "件數", "公斤", "單價", "買家"]
+    if show_serial:
+        display_cols.insert(1, "流水號")
+    
+    st.dataframe(f_df[display_cols], use_container_width=True, height=600)
+
 else:
-    st.warning(f"😭 找不到 {file_name} 的雲端資料")
-    with st.expander("手動上傳備案"):
-        manual_file = st.file_uploader("請點此上傳 SCP 檔案", type=['scp', 'txt'])
-        if manual_file:
-            m_content = manual_file.read().decode("big5", errors="ignore")
-            m_data = process_logic(m_content)
-            if m_data:
-                st.dataframe(pd.DataFrame(m_data), use_container_width=True)
+    st.warning("😭 目前雲端倉庫中沒有可讀取的 SCP 檔案。")
+    st.info("請確認 GitHub 倉庫 goodgorilla5/chaochao-catcher 中已有上傳 SCP 檔。")
