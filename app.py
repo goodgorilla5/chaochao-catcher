@@ -5,9 +5,10 @@ import requests
 import concurrent.futures
 from datetime import datetime
 
+# --- 頁面設定 ---
 st.set_page_config(page_title="燕巢台北行情大數據庫", layout="wide")
 
-# --- 設定區 ---
+# --- GitHub 設定區 ---
 REPO_OWNER = "goodgorilla5"
 REPO_NAME = "chaochao-catcher"
 API_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/"
@@ -15,43 +16,46 @@ API_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/"
 try:
     GITHUB_TOKEN = st.secrets["github_token"]
 except:
-    st.error("❌ 請檢查 Streamlit Secrets 中的 github_token")
+    st.error("❌ 請至 Streamlit 後台 Secrets 設定 github_token")
     st.stop()
 
-# --- 核心解析邏輯 ---
+# --- 核心解析邏輯：直接讀取第四欄總價 ---
 def process_logic(content):
+    # 根據您的檔案格式，紀錄間通常有 4 個空格
     raw_lines = content.split('    ')
     rows = []
     grade_map = {"1": "特", "2": "優", "3": "良"}
     
     for line in raw_lines:
+        # 只抓台北市場 S00076 且是芭樂 F22 的紀錄
         if "F22" in line and "S00076" in line:
             try:
-                # 使用您最信任的日期與市場代碼錨點
+                # 尋找您的精準日期錨點 (如 11502091)
                 date_match = re.search(r"(\d{7,8}1)\s+\d{2}S00076", line)
                 if date_match:
                     date_pos = date_match.start()
                     raw_date_str = date_match.group(1)[:7] # 提取如 1150210
                     
-                    # 1. 流水號合併
+                    # 1. 流水號合併 (移除空格避免重複)
                     serial = line[:date_pos].strip().replace(" ", "")
                     
-                    # 2. 提取等級與小代
+                    # 2. 定位等級與小代 (相對 S00076 位置)
                     remaining = line[date_pos:]
                     s_pos = remaining.find("S00076")
                     level = grade_map.get(remaining[s_pos-2], remaining[s_pos-2])
                     sub_id = remaining[s_pos+6:s_pos+9]
                     
-                    # 3. 提取數據區段 (例如 003+00018+01400+000002520+6000+4218)
+                    # 3. 提取數據區段 (例如 003+00018+01400+000002520)
                     nums = line.split('+')
                     pieces = int(nums[0][-3:].replace(" ", "") or 0)
                     weight = int(nums[1].replace(" ", "") or 0)
                     price_raw = nums[2].strip().split(' ')[0]
                     price = int(price_raw[:-1] if price_raw else 0)
                     
-                    # 直接從原始資料提取「總價」 (第四個欄位：000002520)
+                    # 直接從原始資料抓取第四個區段作為「總價」
                     total_price = int(nums[3].replace(" ", "") or 0)
                     
+                    # 買家欄位
                     buyer = nums[5].strip()[:4] if len(nums) > 5 else ""
 
                     rows.append({
@@ -66,79 +70,102 @@ def process_logic(content):
                         "總價": total_price,
                         "買家": buyer
                     })
-            except: continue
+            except: 
+                continue
     return rows
 
+# --- 從 GitHub 抓取所有資料 ---
 @st.cache_data(ttl=60)
-def fetch_all_data():
+def fetch_all_github_data():
     all_rows = []
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
     try:
         r = requests.get(API_URL, headers=headers)
         if r.status_code != 200: return pd.DataFrame()
         
-        # 抓取所有包含 .SCP 的檔案 (相容 T.SCP)
+        # 抓取所有 .SCP 檔案
         files = [f for f in r.json() if f['name'].upper().endswith('.SCP')]
         
-        def load_file(f_info):
-            res = requests.get(f_info['download_url'], headers=headers)
-            return process_logic(res.content.decode("big5", errors="ignore")) if res.status_code == 200 else []
+        def download_and_parse(file_info):
+            res = requests.get(file_info['download_url'], headers=headers)
+            if res.status_code == 200:
+                text = res.content.decode("big5", errors="ignore")
+                return process_logic(text)
+            return []
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            results = list(executor.map(load_file, files))
+            results = list(executor.map(download_and_parse, files))
         
-        for r_list in results: all_rows.extend(r_list)
-        
+        for r_list in results: 
+            all_rows.extend(r_list)
+            
         df = pd.DataFrame(all_rows)
         if not df.empty:
-            # 1. 剔除重複流水號
+            # 依據流水號去重
             df = df.drop_duplicates(subset="流水號", keep='first')
-            # 2. 建立排序列
+            # 轉換日期供內部排序與篩選
             df['date_obj'] = pd.to_datetime(df['日期編碼'].apply(lambda x: str(int(x[:3])+1911)+x[3:]), format='%Y%m%d')
             df = df.sort_values(by=["date_obj", "單價"], ascending=[False, False])
         return df
-    except: return pd.DataFrame()
+    except:
+        return pd.DataFrame()
 
-# --- 介面 ---
-st.title("📊 燕巢-台北行情大數據庫")
-df = fetch_all_data()
+# --- 主介面 ---
+df = fetch_all_github_data()
 
 if not df.empty:
-    st.sidebar.header("🗓️ 查詢設定")
-    min_d, max_d = df['date_obj'].min().date(), df['date_obj'].max().date()
+    st.sidebar.header("🗓️ 查詢範圍設定")
     
-    # 預設顯示最新日期
-    date_range = st.sidebar.date_input("日期區間", value=(max_d, max_d), min_value=min_d, max_value=max_d)
-    search_sub = st.sidebar.text_input("🔍 搜尋小代")
-    show_serial = st.sidebar.checkbox("顯示流水號", value=False)
+    # 獲取資料庫日期範圍
+    min_d = df['date_obj'].min().date()
+    max_d = df['date_obj'].max().date()
+    
+    # 預設日期區間設定為「最新的一天」
+    date_range = st.sidebar.date_input(
+        "選擇查詢區間",
+        value=(max_d, max_d),
+        min_value=min_d,
+        max_value=max_d
+    )
 
-    # 過濾
+    st.sidebar.divider()
+    search_sub = st.sidebar.text_input("🔍 搜尋小代 (如 627)")
+    show_serial = st.sidebar.checkbox("顯示原始流水號", value=False)
+
+    # 資料過濾邏輯
     f_df = df.copy()
     if isinstance(date_range, tuple) and len(date_range) == 2:
-        f_df = f_df[(f_df['date_obj'].dt.date >= date_range[0]) & (f_df['date_obj'].dt.date <= date_range[1])]
+        start_date, end_date = date_range
+        f_df = f_df[(f_df['date_obj'].dt.date >= start_date) & (f_df['date_obj'].dt.date <= end_date)]
+    
     if search_sub:
         f_df = f_df[f_df['小代'].str.contains(search_sub)]
 
-    # 數據統計
-    total_kg = f_df['公斤'].sum()
-    total_val = f_df['總價'].sum()
-    avg_p = total_val / total_kg if total_kg > 0 else 0
+    # --- 數據統計計算 ---
+    t_pcs = f_df['件數'].sum()
+    t_kg = f_df['公斤'].sum()
+    t_val = f_df['總價'].sum()
+    avg_p = t_val / t_kg if t_kg > 0 else 0
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("總件數", f"{f_df['件數'].sum()} 件")
-    m2.metric("總公斤", f"{total_kg} kg")
+    # --- 顯示標題與六大指標 ---
+    st.title("📊 燕巢-台北行情大數據庫")
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1.metric("總件數", f"{t_pcs} 件")
+    m2.metric("總公斤", f"{t_kg} kg")
     m3.metric("最高價", f"{f_df['單價'].max()} 元")
     m4.metric("最低價", f"{f_df['單價'].min()} 元")
     m5.metric("平均單價", f"{avg_p:.2f} 元")
+    m6.metric("區間總價", f"{t_val:,} 元")
 
     st.divider()
 
-    # 表格
-    cols = ["顯示日期", "等級", "小代", "件數", "公斤", "單價", "總價", "買家"]
-    if show_serial: cols.insert(1, "流水號")
+    # --- 行情表格顯示 ---
+    display_cols = ["顯示日期", "等級", "小代", "件數", "公斤", "單價", "總價", "買家"]
+    if show_serial:
+        display_cols.insert(1, "流水號")
     
     st.dataframe(
-        f_df[cols].rename(columns={"顯示日期":"日期"}), 
+        f_df[display_cols].rename(columns={"顯示日期": "日期"}), 
         use_container_width=True, 
         height=600,
         column_config={
@@ -147,4 +174,4 @@ if not df.empty:
         }
     )
 else:
-    st.warning("倉庫中尚無資料。")
+    st.warning("😭 目前雲端倉庫中沒有可讀取的資料。")
