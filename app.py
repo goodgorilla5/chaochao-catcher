@@ -6,7 +6,7 @@ import concurrent.futures
 from datetime import datetime
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="燕巢台北行情大數據庫", layout="wide")
+st.set_page_config(page_title="燕巢行情數據庫", layout="wide")
 
 # --- GitHub 設定區 ---
 REPO_OWNER = "goodgorilla5"
@@ -155,4 +155,5 @@ if not df.empty:
     m6.metric("區間總價", f"{t_val:,} 元")
 
 else:
+
     st.warning("😭 目前雲端倉庫中沒有可讀取的資料。")
