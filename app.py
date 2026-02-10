@@ -92,36 +92,60 @@ def fetch_all_github_data():
     except:
         return pd.DataFrame()
 
-# --- 主介面 ---
+# --- 讀取資料 ---
 df = fetch_all_github_data()
 
+st.title("🍎 燕巢-台北行情大數據庫")
+
 if not df.empty:
-    st.sidebar.header("🗓️ 查詢範圍設定")
+    # --- 1. 表格上方：查詢控制區 ---
     min_d, max_d = df['date_obj'].min().date(), df['date_obj'].max().date()
     
-    date_range = st.sidebar.date_input("選擇查詢區間", value=(max_d, max_d), min_value=min_d, max_value=max_d)
+    # 手機排版優化：控制區排成兩欄
+    ctrl_c1, ctrl_c2 = st.columns([2, 1])
+    with ctrl_c1:
+        date_range = st.date_input("📅 選擇查詢區間", value=(max_d, max_d), min_value=min_d, max_value=max_d)
+    with ctrl_c2:
+        search_sub = st.text_input("🔍 搜尋小代 (如 627)", placeholder="輸入代號")
 
-    st.sidebar.divider()
+    # 側邊欄僅保留「顯示設定」
     st.sidebar.header("🎨 顯示設定")
-    search_sub = st.sidebar.text_input("🔍 搜尋小代 (如 627)")
-    
-    # --- 欄位隱藏開關 ---
     show_level = st.sidebar.checkbox("顯示等級", value=False)
     show_total_p = st.sidebar.checkbox("顯示總價", value=False)
     show_serial = st.sidebar.checkbox("顯示原始流水號", value=False)
 
+    # 過濾邏輯
     f_df = df.copy()
     if isinstance(date_range, tuple) and len(date_range) == 2:
         f_df = f_df[(f_df['date_obj'].dt.date >= date_range[0]) & (f_df['date_obj'].dt.date <= date_range[1])]
-    
     if search_sub:
         f_df = f_df[f_df['小代'].str.contains(search_sub)]
 
-    # --- 數據統計計算 ---
+    # --- 2. 行情表格顯示 ---
+    display_cols = ["顯示日期", "小代", "件數", "公斤", "單價", "買家"]
+    if show_level: display_cols.insert(1, "等級")
+    if show_total_p:
+        idx = display_cols.index("單價") + 1
+        display_cols.insert(idx, "總價")
+    if show_serial: display_cols.insert(0, "流水號")
+    
+    st.dataframe(
+        f_df[display_cols].rename(columns={"顯示日期": "日期"}), 
+        use_container_width=True, 
+        height=500, # 稍微調低高度，讓下方統計資訊露出
+        column_config={
+            "單價": st.column_config.NumberColumn(format="%d"),
+            "總價": st.column_config.NumberColumn(format="%d")
+        }
+    )
+
+    # --- 3. 表格下方：統計資訊區 ---
+    st.divider()
     t_pcs, t_kg, t_val = f_df['件數'].sum(), f_df['公斤'].sum(), f_df['總價'].sum()
     avg_p = t_val / t_kg if t_kg > 0 else 0
 
-    st.title("📊 燕巢-台北行情大數據庫")
+    # 使用較小的 columns 字體
+    st.markdown("##### 📉 區間數據摘要")
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("總件數", f"{t_pcs} 件")
     m2.metric("總公斤", f"{t_kg} kg")
@@ -130,30 +154,5 @@ if not df.empty:
     m5.metric("平均單價", f"{avg_p:.2f} 元")
     m6.metric("區間總價", f"{t_val:,} 元")
 
-    st.divider()
-
-    # --- 行情表格欄位邏輯 ---
-    # 默認只顯示最核心的資訊
-    display_cols = ["顯示日期", "小代", "件數", "公斤", "單價", "買家"]
-    
-    # 根據勾選狀態插入欄位
-    if show_level:
-        display_cols.insert(1, "等級")
-    if show_total_p:
-        # 插入在單價後面
-        idx = display_cols.index("單價") + 1
-        display_cols.insert(idx, "總價")
-    if show_serial:
-        display_cols.insert(0, "流水號")
-    
-    st.dataframe(
-        f_df[display_cols].rename(columns={"顯示日期": "日期"}), 
-        use_container_width=True, 
-        height=600,
-        column_config={
-            "單價": st.column_config.NumberColumn(format="%d"),
-            "總價": st.column_config.NumberColumn(format="%d")
-        }
-    )
 else:
     st.warning("😭 目前雲端倉庫中沒有可讀取的資料。")
