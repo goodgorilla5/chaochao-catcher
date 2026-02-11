@@ -10,10 +10,20 @@ st.set_page_config(page_title="農會行情大數據庫", layout="wide")
 # 農會定義
 FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
 
+# 品種對照表 (代碼 -> 中文名)
+VARIETY_MAP = {
+    "F22": "蜜棗",
+    "FP1": "珍珠芭",
+    "FP2": "紅心",
+    "FP3": "帝王芭",
+    "FP5": "水晶無籽",
+    "FI3": "其他" # 保留擴充性
+}
+
 try:
     GITHUB_TOKEN = st.secrets["github_token"]
 except:
-    st.error("❌ 請設定 github_token")
+    st.error("❌ 請至 Streamlit 後台 Secrets 設定 github_token")
     st.stop()
 
 def deep_parse(content):
@@ -45,7 +55,7 @@ def deep_parse(content):
             p_str = parts[2].strip().split()[0]
             price = int(p_str[:-1]) if p_str else 0
             
-            # 總價保留 (不截位)
+            # 總價保留
             t_str = parts[3].strip().split()[0]
             total_val = int(t_str) if t_str else 0
             
@@ -54,9 +64,10 @@ def deep_parse(content):
             buyer_match = re.search(r'^\d+', buyer_raw)
             buyer = buyer_match.group() if buyer_match else ""
 
-            # 品種搜尋
-            v_match = re.search(r'(F22|FP1|FP2|FP3|FP5|FI3)', parts[0])
-            variety = v_match.group(1) if v_match else "F22"
+            # 品種搜尋與轉換
+            v_code_match = re.search(r'(F22|FP1|FP2|FP3|FP5|FI3)', parts[0])
+            v_code = v_code_match.group(1) if v_code_match else "F22"
+            v_name = VARIETY_MAP.get(v_code, v_code) # 轉換為中文名
 
             # 日期轉型
             dt_obj = datetime(int(raw_date[:3])+1911, int(raw_date[3:5]), int(raw_date[5:7])).date()
@@ -70,7 +81,7 @@ def deep_parse(content):
                 "農會": farm, "日期": dt_obj, "顯示日期": f"{raw_date[:3]}/{raw_date[3:5]}/{raw_date[5:7]}",
                 "等級": grade_map.get(level_code, level_code), "小代": market_anchor[6:9],
                 "件數": pieces, "公斤": weight, "單價": price, "總價": total_val,
-                "買家": buyer, "流水號": serial, "品種": variety
+                "買家": buyer, "流水號": serial, "品種": v_name
             })
         except: continue
     return rows
@@ -87,13 +98,11 @@ def fetch_data():
             all_rows.extend(deep_parse(res.content.decode("big5", errors="ignore")))
         
         full_df = pd.DataFrame(all_rows)
-        
-        # --- 🛡️ 關鍵修正：全自動去重邏輯 🛡️ ---
+        # --- 🛡️ 數據去重防禦 ---
         if not full_df.empty:
-            # 只要 流水號、日期、小代、件數、總價、買家 都一樣，就視為重複
             full_df = full_df.drop_duplicates(
                 subset=["流水號", "日期", "小代", "件數", "總價", "買家"], 
-                keep='first' # 保留第一筆看到的
+                keep='first'
             )
         return full_df
     except: return pd.DataFrame()
@@ -110,8 +119,11 @@ if not df.empty:
     show_serial = st.sidebar.checkbox("顯示流水號", value=False)
     
     target_farm = st.selectbox("🏥 選擇農會", list(FARMER_MAP.keys()))
+    
+    # 品種選單：現在會顯示 "蜜棗", "珍珠芭" 等中文名稱
     v_list = sorted(df[df['農會']==target_farm]['品種'].unique())
-    target_v = st.selectbox("🍐 選擇品種", v_list, index=v_list.index("F22") if "F22" in v_list else 0)
+    default_v = "蜜棗" if "蜜棗" in v_list else v_list[0]
+    target_v = st.selectbox("🍐 選擇品種", v_list, index=v_list.index(default_v))
     
     # 日期區間選擇 (預設最新單日)
     max_date = df['日期'].max()
