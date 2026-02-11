@@ -9,12 +9,14 @@ st.set_page_config(page_title="農會行情大數據庫", layout="wide")
 
 # 農會與市場對照定義
 FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
+# 更新後的市場規則
 MARKET_RULES = {
     "A1": "一市",
     "A2": "二市",
     "T1": "台中",
     "K1": "高雄",
-    "F1": "鳳山"
+    "F1": "三重市場",
+    "F2": "板橋市場"
 }
 
 # 品種對照表
@@ -36,7 +38,8 @@ except:
 
 # --- 核心解析邏輯 ---
 def deep_parse(content):
-    records = re.split(r'(?=[ATKF]\d{10,})', content) # 擴大切割規則包含 T, K, F
+    # 擴大正則表達式以涵蓋所有市場代碼
+    records = re.split(r'(?=[ATKF]\d{10,})', content) 
     rows = []
     grade_map = {"1": "特", "2": "優", "3": "良"}
     
@@ -52,7 +55,7 @@ def deep_parse(content):
             
             # 提取流水號並判定市場
             serial = rec[:m.start()].strip().replace(" ", "")
-            m_prefix = serial[:2] # 取前兩碼如 A1, T1
+            m_prefix = serial[:2] 
             market_name = MARKET_RULES.get(m_prefix, "其他")
 
             data_part = rec[m.end():]
@@ -112,11 +115,12 @@ df = fetch_data()
 
 # --- 側邊欄：顯示與市場設定 ---
 st.sidebar.header("🏢 市場篩選")
-# 建立市場勾選清單，預設一市與二市
 selected_markets = []
-for m_code, m_name in MARKET_RULES.items():
+# 建立市場清單，側邊欄只顯示中文名稱
+unique_market_names = ["一市", "二市", "台中", "高雄", "三重市場", "板橋市場"]
+for m_name in unique_market_names:
     default_val = True if m_name in ["一市", "二市"] else False
-    if st.sidebar.checkbox(f"開啟 {m_name} ({m_code})", value=default_val):
+    if st.sidebar.checkbox(f"開啟 {m_name}", value=default_val):
         selected_markets.append(m_name)
 
 st.sidebar.markdown("---")
@@ -135,7 +139,7 @@ if not df.empty:
     with r1_c2:
         v_list = df[df['農會']==target_farm]['品種'].unique()
         v_options = [v for v in SORTED_V_NAMES if v in v_list]
-        target_v = st.selectbox("🍐 選擇品種", v_options)
+        target_v = st.selectbox("🍐 選擇品種", v_options) if v_options else st.selectbox("🍐 選擇品種", v_list)
     with r1_c3:
         sort_option = st.selectbox(
             "🔃 排序方式",
@@ -154,7 +158,6 @@ if not df.empty:
         s_buy = st.text_input("👤 搜尋買家")
 
     # --- 核心過濾邏輯 ---
-    # 先過濾農會、品種、以及「側邊欄勾選的市場」
     f_df = df[
         (df['農會'] == target_farm) & 
         (df['品種'] == target_v) & 
@@ -179,7 +182,6 @@ if not df.empty:
         f_df = f_df.sort_values("單價", ascending=True)
 
     # --- 表格顯示 ---
-    # 預設加入「市場」欄位方便辨識
     display_cols = ["顯示日期", "市場", "小代", "件數", "公斤", "單價", "買家"]
     if show_grade: display_cols.insert(display_cols.index("市場")+1, "等級")
     if show_total: display_cols.insert(display_cols.index("單價") + 1, "總價")
@@ -193,7 +195,7 @@ if not df.empty:
     if not f_df.empty:
         t_pcs, t_kg, t_val = f_df['件數'].sum(), f_df['公斤'].sum(), f_df['總價'].sum()
         avg_p = t_val / t_kg if t_kg > 0 else 0
-        st.markdown(f"##### 📉 {target_farm} ({target_v}) 摘要 - 已選市場: {', '.join(selected_markets)}")
+        st.markdown(f"##### 📉 {target_farm} ({target_v}) 摘要")
         m_cols = st.columns(6)
         metrics = [
             ("總件數", f"{int(t_pcs)} 件"), ("總公斤", f"{int(t_kg)} kg"),
@@ -206,4 +208,4 @@ if not df.empty:
                             f'<p style="margin:0;font-size:12px;color:#555;">{l}</p>'
                             f'<p style="margin:0;font-size:15px;font-weight:bold;color:#111;">{v}</p></div>', unsafe_allow_html=True)
 else:
-    st.warning("😭 暫無資料或未勾選任何市場。")
+    st.warning("😭 暫無資料或未勾選市場。")
