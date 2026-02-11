@@ -7,12 +7,11 @@ import concurrent.futures
 # --- 頁面設定 ---
 st.set_page_config(page_title="農會行情大數據庫", layout="wide")
 
-# 農會定義：只要內容包含這些代碼，就自動歸類
+# 農會定義
 FARMER_MAP = {
     "燕巢": "S00076",
     "大社": "S00250",
-    "阿蓮": "S00098",
-    "高樹": "T00493"
+    "阿蓮": "S00098"
 }
 
 try:
@@ -21,21 +20,18 @@ except:
     st.error("❌ 請至 Streamlit 後台 Secrets 設定 github_token")
     st.stop()
 
-# --- 核心解析邏輯 ---
 def process_logic(content):
-    # 改用更強大的正則分割，處理不規則空格與換行
-    # 我們找尋符合數據特徵的行：包含 + 號且包含品項代碼 F22
+    # 用 4 個以上空格切分每一筆資料
+    parts = re.split(r'\s{4,}', content)
     rows = []
     grade_map = {"1": "特", "2": "優", "3": "良"}
     
-    # 先統一將內容中的奇怪換行符處理掉，並以 4 個以上空格或換行來初步切分筆數
-    parts = re.split(r'\s{4,}|\n', content)
-    
     for line in parts:
         line = line.strip()
-        if "F22" in line and "+" in line:
+        # 只要有 F22 且包含 S00 (代表我們選定的三個農會市場)
+        if "F22" in line and "S00" in line:
             try:
-                # 1. 判定農會
+                # 1. 判定農會歸屬
                 belong_to = "未知"
                 for name, code in FARMER_MAP.items():
                     if code in line:
@@ -43,35 +39,34 @@ def process_logic(content):
                         break
                 if belong_to == "未知": continue
 
-                # 2. 定位市場代碼 (S或T開頭加5位數字)
-                m_match = re.search(r"([S|T]\d{5})", line)
-                if not m_match: continue
-                m_pos = m_match.start()
-                m_code = m_match.group(1)
+                # 2. 定位 S00 作為中心點
+                m_pos = line.find("S00")
+                if m_pos < 10: continue # 防呆
 
-                # 3. 提取小代與等級
-                # 等級在市場代碼前 2 位
+                # 3. 提取等級 (S00 前兩位，如 11, 21, 31，取第一碼)
                 level_code = line[m_pos-2]
                 level = grade_map.get(level_code, level_code)
-                # 小代在市場代碼後 6 位開始的 3 碼
+
+                # 4. 提取小代 (市場代碼 S00XXX 之後的 3 位)
+                # 格式通常是 S00XXX 後接 3 位小代
                 sub_id = line[m_pos+6:m_pos+9].strip()
 
-                # 4. 提取日期 (尋找 7 或 8 位數字，通常在市場代碼前面一段距離)
-                # 這裡改用更穩定的相對定位，找市場代碼左側最近的長數字
-                date_search = re.findall(r"(\d{7,8})", line[:m_pos])
-                raw_date_str = date_search[-1][:7] if date_search else "0000000"
+                # 5. 提取日期 (S00 往前推 10 位左右會看到日期 11502111)
+                # 我們直接從行內尋找 7 位或 8 位的長數字
+                date_search = re.search(r"(\d{7,8})", line[m_pos-20:m_pos])
+                raw_date_str = date_search.group(1)[:7] if date_search else "0000000"
 
-                # 5. 處理流水號 (整行最前面到日期前，去空格)
-                serial = line[:line.find(raw_date_str)].replace(" ", "") if raw_date_str != "0000000" else "Unknown"
+                # 6. 處理流水號 (S00 往前 10 位之前的全部內容，除掉空格)
+                serial_part = line[:m_pos-10].strip()
+                serial = serial_part.replace(" ", "")
 
-                # 6. 數值提取 (透過 + 號)
+                # 7. 數值提取 (根據 + 號)
                 nums = line.split('+')
                 pieces = int(nums[0][-3:].strip() or 0)
                 weight = int(nums[1].strip() or 0)
                 price_part = nums[2].strip().split(' ')[0]
                 price = int(price_part[:-1] if price_part else 0)
                 total_price = int(nums[3].strip() or 0)
-                # 買家通常在最後一個 + 號後
                 buyer = nums[-1].strip()[:4]
 
                 rows.append({
@@ -96,14 +91,12 @@ def fetch_all_github_data():
     try:
         r = requests.get(API_URL, headers=headers)
         if r.status_code != 200: return pd.DataFrame()
-        
-        # 【修改點】：不限制檔名開頭，只要是 .SCP 就抓
+        # 抓取所有 .SCP 檔案
         files = [f for f in r.json() if f['name'].lower().endswith('.scp')]
         
         def download_and_parse(file_info):
             res = requests.get(file_info['download_url'], headers=headers)
             if res.status_code == 200:
-                # 嘗試 Big5 讀取
                 return process_logic(res.content.decode("big5", errors="ignore"))
             return []
             
@@ -124,32 +117,22 @@ st.title("🍎 農會行情大數據庫 (蜜棗)")
 df = fetch_all_github_data()
 
 if not df.empty:
-    target_farm = st.selectbox("🏥 選擇農會", options=["燕巢", "大社", "阿蓮", "高樹"], index=0)
+    target_farm = st.selectbox("🏥 選擇農會", options=["燕巢", "大社", "阿蓮"], index=0)
     
     min_d, max_d = df['date_obj'].min().date(), df['date_obj'].max().date()
     date_range = st.date_input("📅 選擇日期區間", value=(max_d, max_d), min_value=min_d, max_value=max_d)
     
     sc1, sc2 = st.columns(2)
     with sc1: search_sub = st.text_input("🔍 搜尋小代")
-    with sc2: search_buyer = st.text_input("👤 搜尋買家")
+    with sc2: search_buyer = st.text_input("👤 搜尋買家代號")
 
-    st.sidebar.header("🎨 顯示設定")
-    show_level = st.sidebar.checkbox("顯示等級", value=False)
-    show_total_p = st.sidebar.checkbox("顯示總價", value=False)
-
-    # 過濾
     f_df = df[df['農會'] == target_farm].copy()
     if isinstance(date_range, tuple) and len(date_range) == 2:
         f_df = f_df[(f_df['date_obj'].dt.date >= date_range[0]) & (f_df['date_obj'].dt.date <= date_range[1])]
     if search_sub: f_df = f_df[f_df['小代'].str.contains(search_sub)]
     if search_buyer: f_df = f_df[f_df['買家'].str.contains(search_buyer)]
 
-    # 表格顯示
-    display_cols = ["顯示日期", "小代", "件數", "公斤", "單價", "買家"]
-    if show_level: display_cols.insert(1, "等級")
-    if show_total_p: display_cols.insert(display_cols.index("單價")+1, "總價")
-    
-    st.dataframe(f_df[display_cols].rename(columns={"顯示日期": "日期"}), 
+    st.dataframe(f_df[["顯示日期", "小代", "件數", "公斤", "單價", "買家"]].rename(columns={"顯示日期": "日期"}), 
                  use_container_width=True, height=450, hide_index=True)
 
     # 底部統計
@@ -166,7 +149,5 @@ if not df.empty:
                 st.markdown(f'<div style="background-color:#f0f2f6;padding:10px;border-radius:5px;text-align:center;">'
                             f'<p style="margin:0;font-size:12px;color:#555;">{l}</p>'
                             f'<p style="margin:0;font-size:15px;font-weight:bold;color:#111;">{v}</p></div>', unsafe_allow_html=True)
-    else:
-        st.info(f"💡 目前 {target_farm} 無相關 F22 成交資料。")
 else:
-    st.warning("😭 倉庫中目前沒有任何 .SCP 檔案或內容解析失敗。")
+    st.warning("😭 讀取失敗。請確認 GitHub 倉庫有 .SCP 檔案且包含 S00 市場代碼的 F22 資料。")
