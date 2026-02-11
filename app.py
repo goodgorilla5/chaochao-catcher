@@ -7,7 +7,7 @@ import concurrent.futures
 # --- 頁面設定 ---
 st.set_page_config(page_title="農會行情大數據庫", layout="wide")
 
-# 農會與市場代碼對照表
+# 農會對應表 (以內容中的市場代碼判定)
 FARMER_MAP = {
     "燕巢": "S00076",
     "大社": "S00250",
@@ -20,19 +20,18 @@ except:
     st.error("❌ 請至 Streamlit 後台 Secrets 設定 github_token")
     st.stop()
 
-# --- 核心解析邏輯 (S00 錨點統合版) ---
 def process_logic(content):
-    # 統一將換行處理掉，並以 4 個以上空格切分筆數
+    # 使用 4 個以上空格切分筆數，這能有效初步分離大社那種長空格行
     parts = re.split(r'\s{4,}', content)
     rows = []
     grade_map = {"1": "特", "2": "優", "3": "良"}
     
     for line in parts:
         line = line.strip()
-        # 關鍵過濾：必須包含 F22 (蜜棗) 且包含市場標籤 S00
+        # 核心篩選：必須有蜜棗代號 F22 且包含市場代碼 S00
         if "F22" in line and "S00" in line:
             try:
-                # 1. 判定農會
+                # 1. 判定這行屬於哪個農會
                 belong_to = "未知"
                 for name, code in FARMER_MAP.items():
                     if code in line:
@@ -40,35 +39,34 @@ def process_logic(content):
                         break
                 if belong_to == "未知": continue
 
-                # 2. 定位 S00 錨點
+                # 2. 以 S00 為基準點 (Anchor)
                 m_pos = line.find("S00")
-                if m_pos < 10: continue 
-
-                # 3. 提取等級 (S00 往前 2 位，取第一碼)
-                # 例如 ...21S00... 取 '2'
+                
+                # 3. 提取等級 (S00 往前 2 位，例如 11S00，取第一個 1)
                 level_code = line[m_pos-2]
                 level = grade_map.get(level_code, level_code)
 
-                # 4. 提取日期 (S00 往前 10 位至 2 位之間是日期 11502111)
-                # 我們直接抓這區間的數字
+                # 4. 提取日期 (S00 往前 10 位到 2 位之間，通常是 11502111)
                 date_part = line[m_pos-10:m_pos-2].strip()
-                raw_date_str = date_part[:7] # 取前 7 位民國年
+                raw_date_str = date_part[:7] # 只取前 7 位
 
-                # 5. 處理流水號 (S00 往前 10 位之前的內容，不論多長，全部去空格)
+                # 5. 處理流水號 (S00 往前 10 位之前的內容全部抓取並去空格)
+                # 這解決了大社 T11150211 後面帶長空格的問題
                 serial_raw = line[:m_pos-10].strip()
                 serial = serial_raw.replace(" ", "")
 
                 # 6. 提取小代 (市場代碼 S00XXX 之後的 3 位)
                 sub_id = line[m_pos+6:m_pos+9].strip()
 
-                # 7. 數值提取 (根據 + 號)
+                # 7. 數值段處理 (+ 號切割)
                 nums = line.split('+')
                 pieces = int(nums[0][-3:].strip() or 0)
                 weight = int(nums[1].strip() or 0)
-                price_part = nums[2].strip().split(' ')[0]
-                price = int(price_part[:-1] if price_part else 0)
+                # 處理單價 (去掉最後一碼 0)
+                p_raw = nums[2].strip().split(' ')[0]
+                price = int(p_raw[:-1] if p_raw else 0)
                 total_price = int(nums[3].strip() or 0)
-                buyer = nums[-1].strip()[:4] # 最後一個 + 號後為買家
+                buyer = nums[-1].strip()[:4]
 
                 rows.append({
                     "農會": belong_to,
@@ -92,7 +90,7 @@ def fetch_all_github_data():
     try:
         r = requests.get(API_URL, headers=headers)
         if r.status_code != 200: return pd.DataFrame()
-        # 抓取倉庫內所有 .SCP 檔案
+        # 不限檔名，只要是 .SCP 副檔名都讀取
         files = [f for f in r.json() if f['name'].lower().endswith('.scp')]
         
         def download_and_parse(file_info):
@@ -108,50 +106,39 @@ def fetch_all_github_data():
         df = pd.DataFrame(all_rows)
         if not df.empty:
             df = df.drop_duplicates(subset="流水號", keep='first')
-            # 轉換日期物件用於排序
             df['date_obj'] = pd.to_datetime(df['日期編碼'].apply(lambda x: str(int(x[:3])+1911)+x[3:]), format='%Y%m%d')
             df = df.sort_values(by=["date_obj", "單價"], ascending=[False, False])
         return df
     except: return pd.DataFrame()
 
 # --- 主介面 ---
-st.title("🍎 農會蜜棗行情大數據庫")
+st.title("🍎 農會行情大數據庫 (蜜棗)")
 df = fetch_all_github_data()
 
 if not df.empty:
-    # 第一層過濾：選擇農會
+    # 頂部農會切換 (預設燕巢)
     target_farm = st.selectbox("🏥 選擇農會", options=["燕巢", "大社", "阿蓮"], index=0)
     
-    # 日期區間
+    # 篩選控制
     min_d, max_d = df['date_obj'].min().date(), df['date_obj'].max().date()
     date_range = st.date_input("📅 選擇日期區間", value=(max_d, max_d), min_value=min_d, max_value=max_d)
     
-    # 搜尋欄位
     sc1, sc2 = st.columns(2)
-    with sc1: search_sub = st.text_input("🔍 搜尋小代", placeholder="輸入代號")
-    with sc2: search_buyer = st.text_input("👤 搜尋買家", placeholder="輸入代號")
+    with sc1: search_sub = st.text_input("🔍 搜尋小代")
+    with sc2: search_buyer = st.text_input("👤 搜尋買家")
 
-    # 側邊欄
-    st.sidebar.header("🎨 顯示設定")
-    show_level = st.sidebar.checkbox("顯示等級", value=False)
-    show_total_p = st.sidebar.checkbox("顯示總價", value=False)
-
-    # 執行過濾
+    # 過濾邏輯
     f_df = df[df['農會'] == target_farm].copy()
     if isinstance(date_range, tuple) and len(date_range) == 2:
         f_df = f_df[(f_df['date_obj'].dt.date >= date_range[0]) & (f_df['date_obj'].dt.date <= date_range[1])]
     if search_sub: f_df = f_df[f_df['小代'].str.contains(search_sub)]
     if search_buyer: f_df = f_df[f_df['買家'].str.contains(search_buyer)]
 
-    # 顯示表格
-    display_cols = ["顯示日期", "小代", "件數", "公斤", "單價", "買家"]
-    if show_level: display_cols.insert(1, "等級")
-    if show_total_p: display_cols.insert(display_cols.index("單價")+1, "總價")
-    
-    st.dataframe(f_df[display_cols].rename(columns={"顯示日期": "日期"}), 
+    # 表格顯示
+    st.dataframe(f_df[["顯示日期", "小代", "件數", "公斤", "單價", "買家"]].rename(columns={"顯示日期": "日期"}), 
                  use_container_width=True, height=450, hide_index=True)
 
-    # 底部統計 (微縮字體)
+    # 底部統計
     st.divider()
     if not f_df.empty:
         t_pcs, t_kg, t_val = f_df['件數'].sum(), f_df['公斤'].sum(), f_df['總價'].sum()
@@ -166,7 +153,6 @@ if not df.empty:
                             f'<p style="margin:0;font-size:12px;color:#555;">{l}</p>'
                             f'<p style="margin:0;font-size:15px;font-weight:bold;color:#111;">{v}</p></div>', unsafe_allow_html=True)
     else:
-        st.info(f"💡 目前選擇的條件下無 F22 蜜棗交易紀錄。")
-
+        st.info(f"💡 目前 {target_farm} 無相關蜜棗(F22)成交資料。")
 else:
-    st.warning("😭 倉庫中目前沒有任何 .SCP 檔案或讀取失敗。")
+    st.warning("😭 資料讀取失敗。請檢查 GitHub 倉庫是否有 .SCP 檔案，且內容包含 S00 市場代碼。")
