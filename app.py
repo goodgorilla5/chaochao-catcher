@@ -10,7 +10,7 @@ st.set_page_config(page_title="農會行情大數據庫", layout="wide")
 # 農會與市場對照定義
 FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
 
-# 更新後的市場規則（代碼對應縮減後的兩字名稱）
+# 流水號代碼對應
 MARKET_RULES = {
     "A1": "一市",
     "A2": "二市",
@@ -41,7 +41,6 @@ except:
 
 # --- 核心解析邏輯 ---
 def deep_parse(content):
-    # 支援 A, T, K, F 開頭的流水號
     records = re.split(r'(?=[ATKF]\d{10,})', content) 
     rows = []
     grade_map = {"1": "特", "2": "優", "3": "良"}
@@ -56,7 +55,6 @@ def deep_parse(content):
             level_code = m.group(2)[0]
             market_anchor = m.group(3)
             
-            # 提取流水號並判定市場
             serial = rec[:m.start()].strip().replace(" ", "")
             m_prefix = serial[:2] 
             market_name = MARKET_RULES.get(m_prefix, "其他")
@@ -116,13 +114,13 @@ def fetch_data():
 # --- 主程式 ---
 df = fetch_data()
 
-# --- 側邊欄：市場篩選與顯示設定 ---
+# --- 側邊欄：市場篩選 (默認開啟一市、二市) ---
 st.sidebar.header("🏢 市場篩選")
 selected_markets = []
-# 依指定順序顯示市場勾選框
 for m_name in MARKET_ORDER:
-    default_val = True if m_name in ["一市", "二市"] else False
-    if st.sidebar.checkbox(f"開啟 {m_name}", value=default_val):
+    # 這裡實作您要求的：默認開啟一市與二市
+    is_default = True if m_name in ["一市", "二市"] else False
+    if st.sidebar.checkbox(f"開啟 {m_name}", value=is_default):
         selected_markets.append(m_name)
 
 st.sidebar.markdown("---")
@@ -134,7 +132,7 @@ show_total = st.sidebar.checkbox("顯示總價", value=False)
 st.title("🍎 農會行情大數據庫")
 
 if not df.empty:
-    # --- 1. 第一層：農會、品種、排序 ---
+    # --- 1. 第一層 ---
     r1_c1, r1_c2, r1_c3 = st.columns([1, 1, 1])
     with r1_c1:
         target_farm = st.selectbox("🏥 選擇農會", list(FARMER_MAP.keys()))
@@ -148,18 +146,18 @@ if not df.empty:
             ["價格：由高至低", "價格：由低至高", "日期：由新到舊", "日期：由舊至新"]
         )
 
-    # --- 2. 第二層：日期區間 ---
+    # --- 2. 第二層 ---
     max_date = df['日期'].max()
     date_range = st.date_input("📅 選擇日期區間", value=[max_date, max_date])
 
-    # --- 3. 第三層：搜尋小代與買家 ---
+    # --- 3. 第三層 ---
     r3_c1, r3_c2 = st.columns(2)
     with r3_c1:
         s_sub = st.text_input("🔍 搜尋小代")
     with r3_c2:
         s_buy = st.text_input("👤 搜尋買家")
 
-    # --- 核心過濾邏輯 ---
+    # --- 過濾與排序 ---
     f_df = df[
         (df['農會'] == target_farm) & 
         (df['品種'] == target_v) & 
@@ -173,7 +171,6 @@ if not df.empty:
     if s_sub: f_df = f_df[f_df['小代'].str.contains(s_sub)]
     if s_buy: f_df = f_df[f_df['買家'].str.contains(s_buy)]
 
-    # 執行排序
     if sort_option == "日期：由新到舊":
         f_df = f_df.sort_values(["日期", "單價"], ascending=[False, False])
     elif sort_option == "日期：由舊至新":
@@ -183,16 +180,15 @@ if not df.empty:
     elif sort_option == "價格：由低至高":
         f_df = f_df.sort_values("單價", ascending=True)
 
-    # --- 表格顯示 ---
-    display_cols = ["顯示日期", "市場", "小代", "件數", "公斤", "單價", "買家"]
+    # --- 表格 ---
+    display_cols = ["日期", "市場", "小代", "件數", "公斤", "單價", "買家"]
     if show_grade: display_cols.insert(display_cols.index("市場")+1, "等級")
     if show_total: display_cols.insert(display_cols.index("單價") + 1, "總價")
     if show_serial: display_cols.insert(0, "流水號")
     
-    st.dataframe(f_df[display_cols].rename(columns={"顯示日期": "日期"}), 
-                 use_container_width=True, height=450, hide_index=True)
+    st.dataframe(f_df[display_cols], use_container_width=True, height=450, hide_index=True)
 
-    # --- 統計摘要 ---
+    # --- 統計 ---
     st.divider()
     if not f_df.empty:
         t_pcs, t_kg, t_val = f_df['件數'].sum(), f_df['公斤'].sum(), f_df['總價'].sum()
@@ -210,4 +206,4 @@ if not df.empty:
                             f'<p style="margin:0;font-size:12px;color:#555;">{l}</p>'
                             f'<p style="margin:0;font-size:15px;font-weight:bold;color:#111;">{v}</p></div>', unsafe_allow_html=True)
 else:
-    st.warning("😭 暫無資料或未勾選市場。")
+    st.warning("😭 請確認左側市場是否已勾選。")
