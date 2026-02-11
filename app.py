@@ -11,7 +11,8 @@ st.set_page_config(page_title="農會行情大數據庫", layout="wide")
 FARMER_MAP = {
     "燕巢": "S00076",
     "大社": "S00250",
-    "阿蓮": "S00098"
+    "阿蓮": "S00098",
+    "高樹": "T00493"
 }
 
 try:
@@ -20,15 +21,15 @@ except:
     st.error("❌ 請至 Streamlit 後台 Secrets 設定 github_token")
     st.stop()
 
-# --- 核心解析邏輯 (修正版) ---
+# --- 核心解析邏輯 (終極穩定版) ---
 def process_logic(content):
-    # 檔案切分：有些檔案是用多個空格，有些是固定寬度，我們用正則表達式切分較保險
-    raw_lines = re.split(r'\s{4,}', content) 
+    # 改用換行符號切割，再進行行內過濾
+    lines = content.replace('\r', '').split('\n')
     rows = []
     grade_map = {"1": "特", "2": "優", "3": "良"}
     
-    for line in raw_lines:
-        # 重點：只抓 F22 (蜜棗)，並過濾掉空行
+    for line in lines:
+        # 特徵門檻：必須包含 F22 且必須有 + 號 (代表數據段)
         if "F22" in line and "+" in line:
             try:
                 # 1. 判定農會歸屬
@@ -37,36 +38,40 @@ def process_logic(content):
                     if code in line:
                         belong_to = name
                         break
-                
-                # 2. 抓取日期 (包容 7 位或 8 位日期)
-                date_match = re.search(r"(\d{7,8})", line)
-                if not date_match: continue
-                raw_date_str = date_match.group(1)[:7]
+                if belong_to == "未知": continue
 
-                # 3. 處理流水號：取市場代碼前的所有字元並去空格
-                # 先找市場代碼 (例如 S00076)
+                # 2. 抓取日期
+                date_match = re.search(r"11\d{5}", line) # 抓取 1150211 格式
+                if not date_match: continue
+                raw_date_str = date_match.group(0)
+
+                # 3. 抓取市場代碼位置，以此定位小代與等級
                 m_match = re.search(r"[S|T]\d{5}", line)
                 if not m_match: continue
                 m_pos = m_match.start()
                 
-                # 市場代碼前即為流水號區段
-                serial = line[:m_pos-2].strip().replace(" ", "")
-                
-                # 4. 等級與小代
-                # 等級通常在市場代碼前 2 位
+                # 等級：市場代碼前 2 格
                 level_code = line[m_pos-2]
                 level = grade_map.get(level_code, level_code)
-                # 小代在市場代碼後 6 位開始的 3 碼
+                # 小代：市場代碼後 6 格開始的 3 碼
                 sub_id = line[m_pos+6:m_pos+9].strip()
                 
-                # 5. 數值提取 (件數+公斤+單價+總價+...+)
+                # 流水號：取日期之前的內容並去空格
+                serial = line[:line.find(raw_date_str)].strip().replace(" ", "")
+
+                # 4. 數據提取 (以 + 號分割)
                 nums = line.split('+')
-                pieces = int(nums[0][-3:].replace(" ", "") or 0)
-                weight = int(nums[1].replace(" ", "") or 0)
-                price_raw = nums[2].strip().split(' ')[0]
-                price = int(price_raw[:-1] if price_raw else 0)
-                total_price = int(nums[3].replace(" ", "") or 0)
-                buyer = nums[5].strip()[:4] if len(nums) > 5 else ""
+                # 件數在第一個 + 號前 3 位
+                pieces = int(nums[0][-3:].strip() or 0)
+                # 公斤在第一個 + 與第二個 + 之間
+                weight = int(nums[1].strip() or 0)
+                # 單價處理
+                price_part = nums[2].strip().split(' ')[0]
+                price = int(price_part[:-1] if price_part else 0)
+                # 總價
+                total_price = int(nums[3].strip() or 0)
+                # 買家 (最後一個數據段)
+                buyer = nums[-1].strip()[:4]
 
                 rows.append({
                     "農會": belong_to,
@@ -95,7 +100,9 @@ def fetch_all_github_data():
         def download_and_parse(file_info):
             res = requests.get(file_info['download_url'], headers=headers)
             if res.status_code == 200:
-                return process_logic(res.content.decode("big5", errors="ignore"))
+                # 強制使用 Big5 讀取
+                text = res.content.decode("big5", errors="ignore")
+                return process_logic(text)
             return []
             
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
@@ -105,6 +112,7 @@ def fetch_all_github_data():
         df = pd.DataFrame(all_rows)
         if not df.empty:
             df = df.drop_duplicates(subset="流水號", keep='first')
+            # 轉換日期物件用於排序
             df['date_obj'] = pd.to_datetime(df['日期編碼'].apply(lambda x: str(int(x[:3])+1911)+x[3:]), format='%Y%m%d')
             df = df.sort_values(by=["date_obj", "單價"], ascending=[False, False])
         return df
@@ -115,10 +123,9 @@ st.title("🍎 農會蜜棗行情大數據庫")
 df = fetch_all_github_data()
 
 if not df.empty:
-    # 農會單選 (隔離數據)
-    target_farm = st.selectbox("🏥 選擇農會", options=["燕巢", "大社", "阿蓮"], index=0)
+    # 農會單選
+    target_farm = st.selectbox("🏥 選擇農會", options=["燕巢", "大社", "阿蓮", "高樹"], index=0)
     
-    # 日期與搜尋控制
     min_d, max_d = df['date_obj'].min().date(), df['date_obj'].max().date()
     date_range = st.date_input("📅 選擇日期區間", value=(max_d, max_d), min_value=min_d, max_value=max_d)
     
@@ -137,7 +144,7 @@ if not df.empty:
     if search_sub: f_df = f_df[f_df['小代'].str.contains(search_sub)]
     if search_buyer: f_df = f_df[f_df['買家'].str.contains(search_buyer)]
 
-    # 表格
+    # 表格顯示
     display_cols = ["顯示日期", "小代", "件數", "公斤", "單價", "買家"]
     if show_level: display_cols.insert(1, "等級")
     if show_total_p: display_cols.insert(display_cols.index("單價")+1, "總價")
@@ -145,7 +152,7 @@ if not df.empty:
     st.dataframe(f_df[display_cols].rename(columns={"顯示日期": "日期"}), 
                  use_container_width=True, height=450, hide_index=True)
 
-    # 底部統計 (HTML 微縮版)
+    # 底部統計 (微縮字體版)
     st.divider()
     if not f_df.empty:
         t_pcs, t_kg, t_val = f_df['件數'].sum(), f_df['公斤'].sum(), f_df['總價'].sum()
@@ -162,4 +169,4 @@ if not df.empty:
     else:
         st.info(f"💡 目前 {target_farm} 無相關 F22 成交資料。")
 else:
-    st.warning("😭 讀取失敗：請檢查 GitHub 檔案或 Token 是否正確。")
+    st.warning("😭 無法讀取資料。請檢查 GitHub 倉庫中是否有對應日期 (115xxxx) 的 .SCP 檔案，且內容包含 F22 蜜棗。")
