@@ -10,7 +10,7 @@ st.set_page_config(page_title="農會行情大數據庫", layout="wide")
 # 農會定義
 FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
 
-# 品種對照表 (固定顯示順序)
+# 品種對照表 (依要求順序排列)
 VARIETY_MAP = {
     "F22": "蜜棗",
     "FP1": "珍珠芭",
@@ -99,7 +99,7 @@ def fetch_data():
 # --- 主程式 ---
 df = fetch_data()
 
-# --- 側邊欄維持原本勾選功能 ---
+# --- 側邊欄：顯示設定 ---
 st.sidebar.header("🎨 顯示設定")
 show_serial = st.sidebar.checkbox("顯示流水號", value=False)
 show_grade = st.sidebar.checkbox("顯示等級", value=False)
@@ -108,34 +108,32 @@ show_total = st.sidebar.checkbox("顯示總價", value=False)
 st.title("🍎 農會行情大數據庫")
 
 if not df.empty:
-    # --- 主畫面上方：農會與品種 ---
-    r1_c1, r1_c2 = st.columns(2)
+    # --- 1. 第一層：農會、品種、排序方式 (價格優先) ---
+    r1_c1, r1_c2, r1_c3 = st.columns([1, 1, 1])
     with r1_c1:
         target_farm = st.selectbox("🏥 選擇農會", list(FARMER_MAP.keys()))
     with r1_c2:
         v_list = df[df['農會']==target_farm]['品種'].unique()
         v_options = [v for v in SORTED_V_NAMES if v in v_list]
         target_v = st.selectbox("🍐 選擇品種", v_options)
-
-    # --- 主畫面中間：日期區間與價格排序 ---
-    r2_c1, r2_c2 = st.columns([2, 1])
-    with r2_c1:
-        max_date = df['日期'].max()
-        date_range = st.date_input("📅 選擇日期區間", value=[max_date, max_date])
-    with r2_c2:
+    with r1_c3:
         sort_option = st.selectbox(
             "🔃 排序方式",
-            ["日期：由新到舊", "價格：由高至低", "價格：由低至高"]
+            ["價格：由高至低", "價格：由低至高", "日期：由新到舊"]
         )
 
-    # --- 主畫面下方：小代號與買家 ---
+    # --- 2. 第二層：日期區間 ---
+    max_date = df['日期'].max()
+    date_range = st.date_input("📅 選擇日期區間", value=[max_date, max_date])
+
+    # --- 3. 第三層：搜尋小代與買家 ---
     r3_c1, r3_c2 = st.columns(2)
     with r3_c1:
         s_sub = st.text_input("🔍 搜尋小代")
     with r3_c2:
         s_buy = st.text_input("👤 搜尋買家")
 
-    # --- 篩選與排序邏輯 ---
+    # --- 過濾邏輯 ---
     f_df = df[(df['農會'] == target_farm) & (df['品種'] == target_v)].copy()
     
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
@@ -147,6 +145,7 @@ if not df.empty:
     if s_sub: f_df = f_df[f_df['小代'].str.contains(s_sub)]
     if s_buy: f_df = f_df[f_df['買家'].str.contains(s_buy)]
 
+    # 執行排序
     if sort_option == "日期：由新到舊":
         f_df = f_df.sort_values(["日期", "單價"], ascending=[False, False])
     elif sort_option == "價格：由高至低":
@@ -154,7 +153,7 @@ if not df.empty:
     elif sort_option == "價格：由低至高":
         f_df = f_df.sort_values("單價", ascending=True)
 
-    # --- 顯示表格欄位處理 ---
+    # --- 表格顯示 ---
     display_cols = ["顯示日期", "小代", "件數", "公斤", "單價", "買家"]
     if show_grade: display_cols.insert(1, "等級")
     if show_total: display_cols.insert(display_cols.index("單價") + 1, "總價")
@@ -163,7 +162,7 @@ if not df.empty:
     st.dataframe(f_df[display_cols].rename(columns={"顯示日期": "日期"}), 
                  use_container_width=True, height=450, hide_index=True)
 
-    # --- 統計資訊 ---
+    # --- 統計摘要 ---
     st.divider()
     if not f_df.empty:
         t_pcs, t_kg, t_val = f_df['件數'].sum(), f_df['公斤'].sum(), f_df['總價'].sum()
