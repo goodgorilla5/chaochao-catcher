@@ -3,146 +3,148 @@ import pandas as pd
 import re
 import requests
 import concurrent.futures
+from datetime import datetime
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="農會行情大數據庫", layout="wide")
+st.set_page_config(page_title="燕巢台北行情大數據庫", layout="wide")
 
-# 農會定義 (剔除高樹)
-FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
+# --- GitHub 設定區 ---
+REPO_OWNER = "goodgorilla5"
+REPO_NAME = "chaochao-catcher"
+API_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/"
 
 try:
     GITHUB_TOKEN = st.secrets["github_token"]
 except:
-    st.error("❌ 請設定 github_token")
+    st.error("❌ 請至 Streamlit 後台 Secrets 設定 github_token")
     st.stop()
 
 # --- 核心解析邏輯 ---
 def process_logic(content):
-    # 這裡不使用空格切分，而是搜尋符合 [日期+等級+S00] 的特徵區塊
-    # 特徵：8位數字 + 空格 + 2位數字 + S00
-    pattern = re.compile(r'(\d{8})\s+(\d{2})S00')
-    matches = list(pattern.finditer(content))
+    raw_lines = content.split('    ')
     rows = []
     grade_map = {"1": "特", "2": "優", "3": "良"}
     
-    for i in range(len(matches)):
-        try:
-            m = matches[i]
-            s_pos = m.start()   # 匹配到的起始點 (日期的位置)
-            raw_date = m.group(1)
-            level_code = m.group(2)[0] # 取得 11, 21, 31 的第一碼
-            
-            # 1. 提取流水號：從上一筆結束到這一筆日期開始
-            prev_end = matches[i-1].end() if i > 0 else 0
-            # 往前找上一筆的結束點 (通常是買家代號後)
-            serial_segment = content[prev_end : s_pos].strip()
-            # 清理流水號中的所有空格
-            serial = serial_segment.replace(" ", "").replace("\n", "").replace("\r", "")
+    for line in raw_lines:
+        if "F22" in line and "S00076" in line:
+            try:
+                date_match = re.search(r"(\d{7,8}1)\s+\d{2}S00076", line)
+                if date_match:
+                    date_pos = date_match.start()
+                    raw_date_str = date_match.group(1)[:7]
+                    serial = line[:date_pos].strip().replace(" ", "")
+                    remaining = line[date_pos:]
+                    s_pos = remaining.find("S00076")
+                    level = grade_map.get(remaining[s_pos-2], remaining[s_pos-2])
+                    sub_id = remaining[s_pos+6:s_pos+9]
+                    nums = line.split('+')
+                    pieces = int(nums[0][-3:].replace(" ", "") or 0)
+                    weight = int(nums[1].replace(" ", "") or 0)
+                    price_raw = nums[2].strip().split(' ')[0]
+                    price = int(price_raw[:-1] if price_raw else 0)
+                    total_price = int(nums[3].replace(" ", "") or 0)
+                    buyer = nums[5].strip()[:4] if len(nums) > 5 else ""
 
-            # 2. 提取市場與小代 (從 S00 開始)
-            anchor_pos = content.find("S00", s_pos)
-            market_code = content[anchor_pos : anchor_pos+6]
-            sub_id = content[anchor_pos+6 : anchor_pos+9].strip()
-            
-            # 3. 判定農會
-            belong_to = "其他"
-            for name, code in FARMER_MAP.items():
-                if code == market_code:
-                    belong_to = name
-                    break
-            if belong_to == "其他": continue
-
-            # 4. 提取數據段 (從小代後找第一個 + 號)
-            data_part = content[anchor_pos+9 : anchor_pos+120]
-            if '+' not in data_part: continue
-            
-            nums = data_part.split('+')
-            pieces = int(nums[0][-3:].strip())
-            weight = int(nums[1].strip())
-            # 單價：取前 4 位 (自動修正 03400 -> 340)
-            price_raw = nums[2].strip().split()[0]
-            price = int(price_raw[:4])
-            total_price = int(nums[3].strip().split()[0])
-            buyer = nums[-1].strip()[:4]
-            
-            # 品種判定
-            variety = nums[0].strip().split()[-1] if len(nums[0].strip().split()) > 1 else "F22"
-
-            rows.append({
-                "農會": belong_to, "日期": f"{raw_date[:3]}/{raw_date[3:5]}/{raw_date[5:7]}",
-                "等級": grade_map.get(level_code, level_code), "小代": sub_id,
-                "件數": pieces, "公斤": weight, "單價": price, "總價": total_price,
-                "買家": buyer, "流水號": serial, "品種": variety, "raw_date": raw_date[:7]
-            })
-        except: continue
+                    rows.append({
+                        "日期編碼": raw_date_str,
+                        "顯示日期": f"{raw_date_str[:3]}/{raw_date_str[3:5]}/{raw_date_str[5:7]}",
+                        "流水號": serial, "等級": level, "小代": sub_id, 
+                        "件數": pieces, "公斤": weight, "單價": price, 
+                        "總價": total_price, "買家": buyer
+                    })
+            except: continue
     return rows
 
 @st.cache_data(ttl=60)
-def fetch_data():
+def fetch_all_github_data():
     all_rows = []
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
     try:
-        r = requests.get("https://api.github.com/repos/goodgorilla5/chaochao-catcher/contents/", headers=headers)
-        files = [f for f in r.json() if f['name'].lower().endswith('.scp')]
-        for f_info in files:
-            res = requests.get(f_info['download_url'], headers=headers)
-            all_rows.extend(process_logic(res.content.decode("big5", errors="ignore")))
-        return pd.DataFrame(all_rows)
+        r = requests.get(API_URL, headers=headers)
+        if r.status_code != 200: return pd.DataFrame()
+        files = [f for f in r.json() if f['name'].upper().endswith('.SCP')]
+        def download_and_parse(file_info):
+            res = requests.get(file_info['download_url'], headers=headers)
+            if res.status_code == 200:
+                return process_logic(res.content.decode("big5", errors="ignore"))
+            return []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(download_and_parse, files))
+        for r_list in results: all_rows.extend(r_list)
+        df = pd.DataFrame(all_rows)
+        if not df.empty:
+            df = df.drop_duplicates(subset="流水號", keep='first')
+            df['date_obj'] = pd.to_datetime(df['日期編碼'].apply(lambda x: str(int(x[:3])+1911)+x[3:]), format='%Y%m%d')
+            df = df.sort_values(by=["date_obj", "單價"], ascending=[False, False])
+        return df
     except: return pd.DataFrame()
 
-# --- 主介面 ---
-st.title("🍎 農會行情大數據庫")
-df = fetch_data()
+# --- 讀取與主介面 ---
+df = fetch_all_github_data()
+st.title("🍎 燕巢-台北行情大數據庫")
 
 if not df.empty:
-    # 側邊欄控制
+    min_d, max_d = df['date_obj'].min().date(), df['date_obj'].max().date()
+    date_range = st.date_input("📅 選擇查詢區間", value=(max_d, max_d), min_value=min_d, max_value=max_d)
+    
+    search_c1, search_c2 = st.columns(2)
+    with search_c1: search_sub = st.text_input("🔍 搜尋小代", placeholder="如 627")
+    with search_c2: search_buyer = st.text_input("👤 搜尋買家", placeholder="如 6000")
+
     st.sidebar.header("🎨 顯示設定")
-    show_serial = st.sidebar.checkbox("顯示流水號", value=False)
-    
-    # 選擇農會
-    target_farm = st.selectbox("🏥 選擇農會", list(FARMER_MAP.keys()))
-    f_df = df[df['農會'] == target_farm].copy()
-    
-    # 選擇品種 (預設 F22)
-    v_list = sorted(f_df['品種'].unique())
-    target_v = st.selectbox("🍐 選擇品種", v_list, index=v_list.index("F22") if "F22" in v_list else 0)
-    f_df = f_df[f_df['品種'] == target_v]
+    show_level = st.sidebar.checkbox("顯示等級", value=False)
+    show_total_p = st.sidebar.checkbox("顯示總價", value=False)
+    show_serial = st.sidebar.checkbox("顯示原始流水號", value=False)
 
-    # 日期與搜尋
-    dates = sorted(f_df['raw_date'].unique(), reverse=True)
-    sel_date = st.selectbox("📅 選擇日期", dates)
+    f_df = df.copy()
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        f_df = f_df[(f_df['date_obj'].dt.date >= date_range[0]) & (f_df['date_obj'].dt.date <= date_range[1])]
+    if search_sub: f_df = f_df[f_df['小代'].str.contains(search_sub)]
+    if search_buyer: f_df = f_df[f_df['買家'].str.contains(search_buyer)]
+
+    # --- 行情表格 ---
+    display_cols = ["顯示日期", "小代", "件數", "公斤", "單價", "買家"]
+    if show_level: display_cols.insert(1, "等級")
+    if show_total_p:
+        idx = display_cols.index("單價") + 1
+        display_cols.insert(idx, "總價")
+    if show_serial: display_cols.insert(0, "流水號")
     
-    c1, c2 = st.columns(2)
-    with c1: search_sub = st.text_input("🔍 搜尋小代")
-    with c2: search_buy = st.text_input("👤 搜尋買家")
+    st.dataframe(
+        f_df[display_cols].rename(columns={"顯示日期": "日期"}), 
+        use_container_width=True, height=450, hide_index=True,
+        column_config={"單價": st.column_config.NumberColumn(format="%d"), "總價": st.column_config.NumberColumn(format="%d")}
+    )
 
-    # 過濾
-    final_df = f_df[f_df['raw_date'] == sel_date]
-    if search_sub: final_df = final_df[final_df['小代'].str.contains(search_sub)]
-    if search_buy: final_df = final_df[final_df['買家'].str.contains(search_buy)]
-
-    # 表格顯示
-    disp_cols = ["日期", "等級", "小代", "件數", "公斤", "單價", "買家"]
-    if show_serial: disp_cols.insert(0, "流水號")
-    
-    st.dataframe(final_df[disp_cols], use_container_width=True, height=400, hide_index=True)
-
-    # --- 統計資訊區 (您喜歡的指標樣式) ---
+    # --- 表格下方：統計資訊區 (微縮字體版) ---
     st.divider()
-    if not final_df.empty:
-        t_pcs, t_kg, t_val = final_df['件數'].sum(), final_df['公斤'].sum(), final_df['總價'].sum()
-        avg_p = t_val / t_kg if t_kg > 0 else 0
-        st.markdown(f"##### 📉 {target_farm} 數據摘要")
-        m_cols = st.columns(6)
-        metrics = [
-            ("總件數", f"{int(t_pcs)} 件"), ("總公斤", f"{int(t_kg)} kg"),
-            ("最高價", f"{final_df['單價'].max()} 元"), ("最低價", f"{final_df['單價'].min()} 元"),
-            ("平均單價", f"{avg_p:.1f} 元"), ("區間總價", f"{int(t_val):,} 元")
-        ]
-        for i, (l, v) in enumerate(metrics):
-            with m_cols[i]:
-                st.markdown(f'<div style="background-color:#f0f2f6;padding:10px;border-radius:5px;text-align:center;">'
-                            f'<p style="margin:0;font-size:12px;color:#555;">{l}</p>'
-                            f'<p style="margin:0;font-size:16px;font-weight:bold;color:#111;">{v}</p></div>', unsafe_allow_html=True)
+    t_pcs, t_kg, t_val = f_df['件數'].sum(), f_df['公斤'].sum(), f_df['總價'].sum()
+    avg_p = t_val / t_kg if t_kg > 0 else 0
+
+    st.markdown("##### 📉 區間數據摘要")
+    
+    # 使用 HTML 建立精簡的指標列
+    cols = st.columns(6)
+    metrics = [
+        ("總件數", f"{t_pcs} 件"),
+        ("總公斤", f"{t_kg} kg"),
+        ("最高價", f"{f_df['單價'].max()} 元"),
+        ("最低價", f"{f_df['單價'].min()} 元"),
+        ("平均單價", f"{avg_p:.2f} 元"),
+        ("區間總價", f"{t_val:,} 元")
+    ]
+
+    for i, (label, value) in enumerate(metrics):
+        with cols[i]:
+            st.markdown(
+                f"""
+                <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; text-align: center;">
+                    <p style="margin: 0; font-size: 13px; color: #555;">{label}</p>
+                    <p style="margin: 0; font-size: 16px; font-weight: bold; color: #111;">{value}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
 else:
-    st.warning("😭 讀取失敗，請確認倉庫內有 .SCP 檔案。")
+    st.warning("😭 目前雲端倉庫中沒有可讀取的資料。")
