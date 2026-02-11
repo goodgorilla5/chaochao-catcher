@@ -5,10 +5,17 @@ import requests
 from datetime import datetime
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="農會行情", layout="wide")
+st.set_page_config(page_title="農會行情大數據庫", layout="wide")
 
-# 農會定義
+# 農會與市場對照定義
 FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
+MARKET_RULES = {
+    "A1": "一市",
+    "A2": "二市",
+    "T1": "台中",
+    "K1": "高雄",
+    "F1": "鳳山"
+}
 
 # 品種對照表
 VARIETY_MAP = {
@@ -29,7 +36,7 @@ except:
 
 # --- 核心解析邏輯 ---
 def deep_parse(content):
-    records = re.split(r'(?=[AT]\d{10,})', content)
+    records = re.split(r'(?=[ATKF]\d{10,})', content) # 擴大切割規則包含 T, K, F
     rows = []
     grade_map = {"1": "特", "2": "優", "3": "良"}
     
@@ -42,7 +49,11 @@ def deep_parse(content):
             raw_date = m.group(1)
             level_code = m.group(2)[0]
             market_anchor = m.group(3)
+            
+            # 提取流水號並判定市場
             serial = rec[:m.start()].strip().replace(" ", "")
+            m_prefix = serial[:2] # 取前兩碼如 A1, T1
+            market_name = MARKET_RULES.get(m_prefix, "其他")
 
             data_part = rec[m.end():]
             if '+' not in data_part: continue
@@ -73,7 +84,7 @@ def deep_parse(content):
 
             rows.append({
                 "農會": farm, "日期": dt_obj, "顯示日期": f"{raw_date[:3]}/{raw_date[3:5]}/{raw_date[5:7]}",
-                "等級": grade_map.get(level_code, level_code), "小代": market_anchor[6:9],
+                "市場": market_name, "等級": grade_map.get(level_code, level_code), "小代": market_anchor[6:9],
                 "件數": pieces, "公斤": weight, "單價": price, "總價": total_val,
                 "買家": buyer, "流水號": serial, "品種": v_name
             })
@@ -99,16 +110,25 @@ def fetch_data():
 # --- 主程式 ---
 df = fetch_data()
 
-# --- 側邊欄：顯示設定 ---
+# --- 側邊欄：顯示與市場設定 ---
+st.sidebar.header("🏢 市場篩選")
+# 建立市場勾選清單，預設一市與二市
+selected_markets = []
+for m_code, m_name in MARKET_RULES.items():
+    default_val = True if m_name in ["一市", "二市"] else False
+    if st.sidebar.checkbox(f"開啟 {m_name} ({m_code})", value=default_val):
+        selected_markets.append(m_name)
+
+st.sidebar.markdown("---")
 st.sidebar.header("🎨 顯示設定")
 show_serial = st.sidebar.checkbox("顯示流水號", value=False)
 show_grade = st.sidebar.checkbox("顯示等級", value=False)
 show_total = st.sidebar.checkbox("顯示總價", value=False)
 
-st.title("🍎 農會行情")
+st.title("🍎 農會行情大數據庫")
 
 if not df.empty:
-    # --- 1. 第一層：農會、品種、排序方式 ---
+    # --- 1. 第一層：農會、品種、排序 ---
     r1_c1, r1_c2, r1_c3 = st.columns([1, 1, 1])
     with r1_c1:
         target_farm = st.selectbox("🏥 選擇農會", list(FARMER_MAP.keys()))
@@ -133,31 +153,35 @@ if not df.empty:
     with r3_c2:
         s_buy = st.text_input("👤 搜尋買家")
 
-    # --- 過濾邏輯 ---
-    f_df = df[(df['農會'] == target_farm) & (df['品種'] == target_v)].copy()
+    # --- 核心過濾邏輯 ---
+    # 先過濾農會、品種、以及「側邊欄勾選的市場」
+    f_df = df[
+        (df['農會'] == target_farm) & 
+        (df['品種'] == target_v) & 
+        (df['市場'].isin(selected_markets))
+    ].copy()
     
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
         start_date, end_date = date_range
         f_df = f_df[(f_df['日期'] >= start_date) & (f_df['日期'] <= end_date)]
-    elif isinstance(date_range, (list, tuple)) and len(date_range) == 1:
-        f_df = f_df[f_df['日期'] == date_range[0]]
 
     if s_sub: f_df = f_df[f_df['小代'].str.contains(s_sub)]
     if s_buy: f_df = f_df[f_df['買家'].str.contains(s_buy)]
 
-    # --- 執行排序 (新增日期由舊至新邏輯) ---
+    # 執行排序
     if sort_option == "日期：由新到舊":
         f_df = f_df.sort_values(["日期", "單價"], ascending=[False, False])
     elif sort_option == "日期：由舊至新":
-        f_df = f_df.sort_values(["日期", "單價"], ascending=[True, False]) # 同天內仍按價格降序
+        f_df = f_df.sort_values(["日期", "單價"], ascending=[True, False])
     elif sort_option == "價格：由高至低":
         f_df = f_df.sort_values("單價", ascending=False)
     elif sort_option == "價格：由低至高":
         f_df = f_df.sort_values("單價", ascending=True)
 
     # --- 表格顯示 ---
-    display_cols = ["顯示日期", "小代", "件數", "公斤", "單價", "買家"]
-    if show_grade: display_cols.insert(1, "等級")
+    # 預設加入「市場」欄位方便辨識
+    display_cols = ["顯示日期", "市場", "小代", "件數", "公斤", "單價", "買家"]
+    if show_grade: display_cols.insert(display_cols.index("市場")+1, "等級")
     if show_total: display_cols.insert(display_cols.index("單價") + 1, "總價")
     if show_serial: display_cols.insert(0, "流水號")
     
@@ -169,7 +193,7 @@ if not df.empty:
     if not f_df.empty:
         t_pcs, t_kg, t_val = f_df['件數'].sum(), f_df['公斤'].sum(), f_df['總價'].sum()
         avg_p = t_val / t_kg if t_kg > 0 else 0
-        st.markdown(f"##### 📉 {target_farm} ({target_v}) 摘要")
+        st.markdown(f"##### 📉 {target_farm} ({target_v}) 摘要 - 已選市場: {', '.join(selected_markets)}")
         m_cols = st.columns(6)
         metrics = [
             ("總件數", f"{int(t_pcs)} 件"), ("總公斤", f"{int(t_kg)} kg"),
@@ -182,4 +206,4 @@ if not df.empty:
                             f'<p style="margin:0;font-size:12px;color:#555;">{l}</p>'
                             f'<p style="margin:0;font-size:15px;font-weight:bold;color:#111;">{v}</p></div>', unsafe_allow_html=True)
 else:
-    st.warning("😭 暫無資料。")
+    st.warning("😭 暫無資料或未勾選任何市場。")
