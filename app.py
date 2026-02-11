@@ -10,7 +10,7 @@ st.set_page_config(page_title="農會行情", layout="wide")
 # 農會定義
 FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
 
-# 品種對照表 (依要求順序排列)
+# 品種對照表
 VARIETY_MAP = {
     "F22": "蜜棗",
     "FP1": "珍珠芭",
@@ -108,7 +108,7 @@ show_total = st.sidebar.checkbox("顯示總價", value=False)
 st.title("🍎 農會行情")
 
 if not df.empty:
-    # --- 1. 第一層：農會、品種、排序方式 (價格優先) ---
+    # --- 1. 第一層：農會、品種、排序方式 ---
     r1_c1, r1_c2, r1_c3 = st.columns([1, 1, 1])
     with r1_c1:
         target_farm = st.selectbox("🏥 選擇農會", list(FARMER_MAP.keys()))
@@ -119,7 +119,7 @@ if not df.empty:
     with r1_c3:
         sort_option = st.selectbox(
             "🔃 排序方式",
-            ["價格：由高至低", "價格：由低至高", "日期：由新到舊"]
+            ["價格：由高至低", "價格：由低至高", "日期：由新到舊", "日期：由舊至新"]
         )
 
     # --- 2. 第二層：日期區間 ---
@@ -145,9 +145,11 @@ if not df.empty:
     if s_sub: f_df = f_df[f_df['小代'].str.contains(s_sub)]
     if s_buy: f_df = f_df[f_df['買家'].str.contains(s_buy)]
 
-    # 執行排序
+    # --- 執行排序 (新增日期由舊至新邏輯) ---
     if sort_option == "日期：由新到舊":
         f_df = f_df.sort_values(["日期", "單價"], ascending=[False, False])
+    elif sort_option == "日期：由舊至新":
+        f_df = f_df.sort_values(["日期", "單價"], ascending=[True, False]) # 同天內仍按價格降序
     elif sort_option == "價格：由高至低":
         f_df = f_df.sort_values("單價", ascending=False)
     elif sort_option == "價格：由低至高":
@@ -180,5 +182,4 @@ if not df.empty:
                             f'<p style="margin:0;font-size:12px;color:#555;">{l}</p>'
                             f'<p style="margin:0;font-size:15px;font-weight:bold;color:#111;">{v}</p></div>', unsafe_allow_html=True)
 else:
-
     st.warning("😭 暫無資料。")
