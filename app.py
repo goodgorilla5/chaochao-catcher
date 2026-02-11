@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="農會行情大數據庫", layout="wide")
+st.set_page_config(page_title="農會行情", layout="wide")
 
 # 農會定義
 FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
@@ -105,7 +105,7 @@ show_serial = st.sidebar.checkbox("顯示流水號", value=False)
 show_grade = st.sidebar.checkbox("顯示等級", value=False)
 show_total = st.sidebar.checkbox("顯示總價", value=False)
 
-st.title("🍎 農會行情大數據庫")
+st.title("🍎 農會行情")
 
 if not df.empty:
     # --- 1. 第一層：農會、品種、排序方式 (價格優先) ---
@@ -180,4 +180,5 @@ if not df.empty:
                             f'<p style="margin:0;font-size:12px;color:#555;">{l}</p>'
                             f'<p style="margin:0;font-size:15px;font-weight:bold;color:#111;">{v}</p></div>', unsafe_allow_html=True)
 else:
+
     st.warning("😭 暫無資料。")
