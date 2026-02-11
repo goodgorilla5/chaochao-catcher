@@ -42,12 +42,10 @@ def deep_parse(content):
             # 數值提取
             pieces = int(parts[0][-3:].strip())
             weight = int(parts[1].strip())
-            
-            # 單價修正 (單價仍維持截掉末位0，如 00450 -> 45)
             p_str = parts[2].strip().split()[0]
             price = int(p_str[:-1]) if p_str else 0
             
-            # --- 總價保留 (不截位) ---
+            # 總價保留 (不截位)
             t_str = parts[3].strip().split()[0]
             total_val = int(t_str) if t_str else 0
             
@@ -87,7 +85,17 @@ def fetch_data():
         for f_info in files:
             res = requests.get(f_info['download_url'], headers=headers)
             all_rows.extend(deep_parse(res.content.decode("big5", errors="ignore")))
-        return pd.DataFrame(all_rows)
+        
+        full_df = pd.DataFrame(all_rows)
+        
+        # --- 🛡️ 關鍵修正：全自動去重邏輯 🛡️ ---
+        if not full_df.empty:
+            # 只要 流水號、日期、小代、件數、總價、買家 都一樣，就視為重複
+            full_df = full_df.drop_duplicates(
+                subset=["流水號", "日期", "小代", "件數", "總價", "買家"], 
+                keep='first' # 保留第一筆看到的
+            )
+        return full_df
     except: return pd.DataFrame()
 
 # --- 主介面 ---
@@ -105,7 +113,7 @@ if not df.empty:
     v_list = sorted(df[df['農會']==target_farm]['品種'].unique())
     target_v = st.selectbox("🍐 選擇品種", v_list, index=v_list.index("F22") if "F22" in v_list else 0)
     
-    # --- 日期區間選擇 (預設最新單日) ---
+    # 日期區間選擇 (預設最新單日)
     max_date = df['日期'].max()
     date_range = st.date_input("📅 選擇日期區間", value=[max_date, max_date])
 
