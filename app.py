@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="農會行情大數據庫", layout="wide")
+st.set_page_config(page_title="農會行情", layout="wide")
 
 # 農會與市場對照定義
 FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
@@ -86,7 +86,7 @@ show_grade = st.sidebar.checkbox("顯示等級", value=False)
 show_total = st.sidebar.checkbox("顯示總價", value=False)
 
 # --- 主畫面顯示 ---
-st.title("🍎 農會行情大數據庫")
+st.title("🍎 農會行情")
 
 if not df.empty:
     # 第一排：主要篩選器
@@ -159,4 +159,5 @@ if not df.empty:
         avg_p = t_val / t_kg if t_kg > 0 else 0
         st.info(f"📊 統計摘要｜總件數：{int(t_pcs)}｜總公斤：{int(t_kg)}｜平均單價：{avg_p:.1f}｜總額：{int(t_val):,}")
 else:
+
     st.warning("⚠️ 沒找到資料，請檢查 GitHub 或調整篩選條件。")
