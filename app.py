@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="農會行情大數據庫", layout="wide")
+st.set_page_config(page_title="農會行情", layout="wide")
 
 # 固定定義
 FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
@@ -17,7 +17,7 @@ SORTED_V_NAMES = ["蜜棗", "珍珠芭", "紅心", "帝王芭", "水晶無籽"]
 try:
     GITHUB_TOKEN = st.secrets["github_token"]
 except:
-    st.error("❌ 請在 Streamlit Cloud 設定中配置 github_token")
+    st.error("❌ 請設定 github_token")
     st.stop()
 
 # --- 核心解析邏輯 ---
@@ -68,30 +68,33 @@ def fetch_data():
 
 df = fetch_data()
 
-# --- 側邊欄：全選功能邏輯 ---
+# --- 側邊欄 ---
 st.sidebar.title("⚙️ 控制面板")
 
+# 修正後的全選市場邏輯
 st.sidebar.subheader("🏢 市場選擇")
-# 全選功能：當勾選全選時，清單內所有市場都會被選中
-all_mkt = st.sidebar.checkbox("全選所有市場")
+if "select_all" not in st.session_state:
+    st.session_state.select_all = False
+
+# 全選勾選框
+all_mkt = st.sidebar.checkbox("全選所有市場", key="all_mkt_checkbox")
 
 selected_markets = []
 for m in MARKET_ORDER:
-    # 預設值：若勾選全選則 True，否則預設勾選一市、二市
-    default_val = True if all_mkt else (m in ["一市", "二市"])
-    if st.sidebar.checkbox(m, value=default_val, key=f"m_{m}"):
+    # 邏輯：如果全選被勾起，則所有項目強制 True；否則恢復預設（一市、二市）
+    is_checked = True if all_mkt else (m in ["一市", "二市"])
+    if st.sidebar.checkbox(m, value=is_checked, key=f"m_{m}"):
         selected_markets.append(m)
 
 st.sidebar.markdown("---")
 
 st.sidebar.subheader("👁️ 顯示設定")
-# 回歸默認隱藏流水號
 show_serial = st.sidebar.checkbox("顯示流水號", value=False)
 show_grade = st.sidebar.checkbox("顯示等級", value=False)
 show_total = st.sidebar.checkbox("顯示總價", value=False)
 
 # --- 主畫面 ---
-st.title("🍎 農會行情大數據庫")
+st.title("🍎 農會行情")
 
 if not df.empty:
     c1, c2, c3 = st.columns(3)
@@ -120,11 +123,12 @@ if not df.empty:
         date_range = st.date_input("📅 選擇日期區間", value=[max_dt, max_dt])
     with c_d2: s_buy = st.text_input("👤 買家搜尋")
 
-    # --- 過濾與排序 ---
+    # 過濾
     f_df = df[(df['農會']==target_farm) & (df['品種']==target_v) & (df['市場'].isin(selected_markets))].copy()
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
         f_df = f_df[(f_df['日期'] >= date_range[0]) & (f_df['日期'] <= date_range[1])]
     
+    # 小代過濾 (修正拼字錯誤)
     if fav_subs or s_sub:
         if fav_subs and not s_sub: f_df = f_df[f_df['小代'].isin(fav_subs)]
         elif s_sub and not fav_subs: f_df = f_df[f_df['小代'].str.contains(s_sub)]
@@ -132,12 +136,13 @@ if not df.empty:
     
     if s_buy: f_df = f_df[f_df['買家'].str.contains(s_buy)]
 
+    # 排序
     if sort_opt == "價格：由高至低": f_df = f_df.sort_values("單價", ascending=False)
     elif sort_opt == "價格：由低至高": f_df = f_df.sort_values("單價", ascending=True)
     elif sort_opt == "日期：由新到舊": f_df = f_df.sort_values(["日期", "單價"], ascending=[False, False])
     elif sort_opt == "日期：由舊至新": f_df = f_df.sort_values(["日期", "單價"], ascending=[True, False])
 
-    # --- 顯示表格 ---
+    # 顯示表格
     disp_cols = ["顯示日期", "市場", "小代", "件數", "公斤", "單價", "買家"]
     if show_grade: disp_cols.insert(2, "等級")
     if show_total: disp_cols.append("總價")
@@ -145,7 +150,7 @@ if not df.empty:
     
     st.dataframe(f_df[disp_cols].rename(columns={"顯示日期":"日期"}), use_container_width=True, height=400, hide_index=True)
 
-    # --- 📊 區間行情彙總 (縮小字體) ---
+    # --- 📊 行情彙總 (20px 字體) ---
     if not f_df.empty:
         st.divider()
         t_pcs, t_kg, t_val = int(f_df['件數'].sum()), int(f_df['公斤'].sum()), int(f_df['總價'].sum())
