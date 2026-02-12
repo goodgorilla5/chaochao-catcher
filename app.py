@@ -157,7 +157,20 @@ if not df.empty:
         st.divider()
         t_pcs, t_kg, t_val = f_df['件數'].sum(), f_df['公斤'].sum(), f_df['總價'].sum()
         avg_p = t_val / t_kg if t_kg > 0 else 0
-        st.info(f"📊 統計摘要｜總件數：{int(t_pcs)}｜總公斤：{int(t_kg)}｜平均單價：{avg_p:.1f}｜總額：{int(t_val):,}")
+# 底部統計摘要
+    if not f_df.empty:
+        st.divider()
+        t_pcs = f_df['件數'].sum()
+        t_kg = f_df['公斤'].sum()
+        t_val = f_df['總價'].sum()
+        avg_p = t_val / t_kg if t_kg > 0 else 0
+        
+        # 補回最高價與最低價
+        max_p = f_df['單價'].max()
+        min_p = f_df['單價'].min()
+        
+        st.info(f"📊 統計摘要｜最高價：{max_p}｜最低價：{min_p}｜平均單價：{avg_p:.1f}｜總件數：{int(t_pcs)}｜總公斤：{int(t_kg)}｜總額：{int(t_val):,}")
 else:
 
     st.warning("⚠️ 沒找到資料，請檢查 GitHub 或調整篩選條件。")
+
