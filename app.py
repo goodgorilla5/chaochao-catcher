@@ -4,25 +4,23 @@ import re
 import requests
 from datetime import datetime
 
-# --- 頁面設定 ---
+# 頁面設定
 st.set_page_config(page_title="農會行情大數據庫", layout="wide")
 
-# 農會與市場對照定義
+# 固定設定
 FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
 MARKET_RULES = {"A1": "一市", "A2": "二市", "F1": "三重", "F2": "板橋", "T1": "台中", "K1": "高雄"}
 MARKET_ORDER = ["一市", "二市", "三重", "板橋", "台中", "高雄"]
-
-# 品種對照表
 VARIETY_MAP = {"F22": "蜜棗", "FP1": "珍珠芭", "FP2": "紅心", "FP3": "帝王芭", "FP5": "水晶無籽", "FI3": "其他"}
-SORTED_V_NAMES = ["蜜棗", "珍珠芭", "紅心", "帝王芭", "水晶無籽"]
 
+# 讀取 TOKEN
 try:
     GITHUB_TOKEN = st.secrets["github_token"]
 except:
-    st.error("❌ 請在 Streamlit Cloud 設定中配置 github_token")
+    st.error("❌ 找不到 Token，請檢查 Streamlit Secrets 設定。")
     st.stop()
 
-# --- 核心解析邏輯 (同前，確保數據正確) ---
+# 解析邏輯
 def deep_parse(content):
     records = re.split(r'(?=[ATKF]\d{10,})', content) 
     rows = []
@@ -38,8 +36,7 @@ def deep_parse(content):
             data_part = rec[m.end():]
             if '+' not in data_part: continue
             parts = data_part.split('+')
-            pieces = int(parts[0][-3:].strip())
-            weight = int(parts[1].strip())
+            pieces, weight = int(parts[0][-3:].strip()), int(parts[1].strip())
             price = int(parts[2].strip().split()[0][:-1]) if parts[2].strip() else 0
             total_val = int(parts[3].strip().split()[0]) if parts[3].strip() else 0
             buyer_match = re.search(r'^\d+', parts[-1].strip())
@@ -70,93 +67,67 @@ def fetch_data():
         for f_info in files:
             res = requests.get(f_info['download_url'], headers=headers)
             all_rows.extend(deep_parse(res.content.decode("big5", errors="ignore")))
-        full_df = pd.DataFrame(all_rows)
-        if not full_df.empty:
-            full_df = full_df.drop_duplicates(subset=["流水號", "日期", "小代", "件數", "總價", "買家"], keep='first')
-        return full_df
+        return pd.DataFrame(all_rows).drop_duplicates() if all_rows else pd.DataFrame()
     except: return pd.DataFrame()
 
 df = fetch_data()
 
-# --- 側邊欄：僅保留基本市場開關與設定 ---
-st.sidebar.title("⚙️ 基本設定")
+# --- 側邊欄：僅留基本開關 ---
+st.sidebar.title("基本設定")
 selected_markets = [m for m in MARKET_ORDER if st.sidebar.checkbox(f"開啟 {m}", value=(m in ["一市", "二市"]))]
-show_serial = st.sidebar.checkbox("顯示流水號", value=False)
-show_grade = st.sidebar.checkbox("顯示等級", value=False)
-show_total = st.sidebar.checkbox("顯示總價", value=False)
+show_serial = st.sidebar.checkbox("流水號", False)
+show_grade = st.sidebar.checkbox("等級", False)
+show_total = st.sidebar.checkbox("總價", False)
 
-# --- 主畫面顯示 ---
+# --- 主畫面 ---
 st.title("🍎 農會行情大數據庫")
 
+# 強制在最上方顯示常用小代
+st.success("👇 **請點選下方常用小代，或在右側輸入搜尋**")
+hc1, hc2, hc3, hc4 = st.columns([1, 1, 1, 3])
+fav_subs = []
+with hc1: 
+    if st.checkbox("看 633", key="f633"): fav_subs.append("633")
+with hc2: 
+    if st.checkbox("看 627", key="f627"): fav_subs.append("627")
+with hc3: 
+    if st.checkbox("看 626", key="f626"): fav_subs.append("626")
+with hc4:
+    s_sub = st.text_input("🔍 手動輸入小代", key="s_sub")
+
 if not df.empty:
-    # 第一排：主要篩選器
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        target_farm = st.selectbox("🏥 選擇農會", list(FARMER_MAP.keys()))
-    with c2:
-        v_list = df[df['農會']==target_farm]['品種'].unique()
-        v_options = [v for v in SORTED_V_NAMES if v in v_list]
-        target_v = st.selectbox("🍐 選擇品種", v_options) if v_options else st.selectbox("🍐 選擇品種", v_list)
-    with c3:
-        sort_option = st.selectbox("🔃 排序方式", ["價格：由高至低", "價格：由低至高", "日期：由新到舊", "日期：由舊至新"])
+    # 選擇與排序
+    r1, r2, r3 = st.columns(3)
+    with r1: target_farm = st.selectbox("🏥 選擇農會", list(FARMER_MAP.keys()))
+    with r2: target_v = st.selectbox("🍐 選擇品種", df[df['農會']==target_farm]['品種'].unique())
+    with r3: sort_option = st.selectbox("🔃 排序", ["價格：由高至低", "價格：由低至高", "日期：由新到舊", "日期：由舊至新"])
 
-    # --- 新增：常用小代快選 (放在正中央最顯眼的位置) ---
-    st.write("---")
-    st.markdown("##### ⭐ 常用小代快選")
-    fc1, fc2, fc3, fc4 = st.columns([1, 1, 1, 3])
-    fav_subs = []
-    with fc1: 
-        if st.checkbox("633", key="f633"): fav_subs.append("633")
-    with fc2: 
-        if st.checkbox("627", key="f627"): fav_subs.append("627")
-    with fc3: 
-        if st.checkbox("626", key="f626"): fav_subs.append("626")
-    with fc4:
-        s_sub = st.text_input("🔍 手動輸入其他小代", placeholder="例如: 123")
-    st.write("---")
+    max_date = df['日期'].max()
+    date_range = st.date_input("📅 日期區間", value=[max_date, max_date])
+    s_buy = st.text_input("👤 買家搜尋")
 
-    # 第三排：日期與買家搜尋
-    c7, c8 = st.columns(2)
-    with c7:
-        max_date = df['日期'].max()
-        date_range = st.date_input("📅 選擇日期區間", value=[max_date, max_date])
-    with c8:
-        s_buy = st.text_input("👤 搜尋買家代號")
-
-    # --- 過濾邏輯 ---
+    # 過濾
     f_df = df[(df['農會'] == target_farm) & (df['品種'] == target_v) & (df['市場'].isin(selected_markets))].copy()
-    
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
         f_df = f_df[(f_df['日期'] >= date_range[0]) & (f_df['日期'] <= date_range[1])]
 
-    # 小代邏輯優化
+    # 小代過濾邏輯
     if fav_subs or s_sub:
         if fav_subs and not s_sub:
             f_df = f_df[f_df['小代'].isin(fav_subs)]
         elif s_sub and not fav_subs:
             f_df = f_df[f_df['小代'].str.contains(s_sub)]
         else:
-            f_df = f_df[f_df['小代'].isin(fav_subs) | f_df['小ate'].str.contains(s_sub)]
+            f_df = f_df[f_df['小代'].isin(fav_subs) | f_df['小代'].str.contains(s_sub)]
 
     if s_buy: f_df = f_df[f_df['買家'].str.contains(s_buy)]
 
     # 排序
-    asc_map = {"價格：由高至低": [False], "價格：由低至高": [True], "日期：由新到舊": [False, False], "日期：由舊至新": [True, False]}
-    sort_cols = ["單價"] if "價格" in sort_option else ["日期", "單價"]
-    f_df = f_df.sort_values(sort_cols, ascending=asc_map[sort_option])
+    asc = {"價格：由高至低": False, "價格：由低至高": True, "日期：由新到舊": False, "日期：由舊至新": True}
+    f_df = f_df.sort_values("單價" if "價格" in sort_option else "日期", ascending=asc[sort_option])
 
-    # 表格顯示
-    display_cols = ["顯示日期", "市場", "小代", "件數", "公斤", "單價", "買家"]
-    if show_grade: display_cols.insert(2, "等級")
-    if show_total: display_cols.append("總價")
-    if show_serial: display_cols.insert(0, "流水號")
-    
-    st.dataframe(f_df[display_cols].rename(columns={"顯示日期": "日期"}), use_container_width=True, height=500, hide_index=True)
-
-    if not f_df.empty:
-        st.divider()
-        t_pcs, t_kg, t_val = f_df['件數'].sum(), f_df['公斤'].sum(), f_df['總價'].sum()
-        avg_p = t_val / t_kg if t_kg > 0 else 0
-        st.info(f"📊 統計摘要｜總件數：{int(t_pcs)}｜總公斤：{int(t_kg)}｜平均單價：{avg_p:.1f}｜總額：{int(t_val):,}")
-else:
-    st.warning("⚠️ 沒找到資料，請檢查 GitHub 或調整篩選條件。")
+    # 顯示
+    cols = ["日期", "市場", "小代", "件數", "公斤", "單價", "買家"]
+    if show_grade: cols.insert(2, "等級")
+    if show_total: cols.append("總價")
+    st.dataframe(f_df[cols], use_container_width=True, hide_index=True)
