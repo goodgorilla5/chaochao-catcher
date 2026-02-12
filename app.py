@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="農會行情大數據庫", layout="wide")
+st.set_page_config(page_title="農會行情", layout="wide")
 
 # 固定定義
 FARMER_MAP = {"燕巢": "S00076", "大社": "S00250", "阿蓮": "S00098"}
@@ -74,7 +74,7 @@ show_grade = st.sidebar.checkbox("顯示等級", False)
 show_total = st.sidebar.checkbox("顯示總價", False)
 
 # --- 主畫面 ---
-st.title("🍎 農會行情大數據庫")
+st.title("🍎 農會行情")
 
 if not df.empty:
     c1, c2, c3 = st.columns(3)
@@ -139,4 +139,5 @@ if not df.empty:
             st.markdown(f"**總件數**：<span style='font-size:20px;'>{t_pcs}</span> 件", unsafe_allow_html=True)
             st.markdown(f"**總公斤**：<span style='font-size:20px;'>{t_kg}</span> kg", unsafe_allow_html=True)
 else:
+
     st.warning("⚠️ 數據加載中或無資料。")
