@@ -74,7 +74,9 @@ st.sidebar.title("⚙️ 控制面板")
 st.sidebar.subheader("🏢 市場選擇")
 selected_markets = []
 for m in MARKET_ORDER:
-    if st.sidebar.checkbox(m, value=(m in ["一市", "二市"]), key=f"m_{m}"):
+    # 調整此處：預設勾選 一市、二市、三重
+    default_active = (m in ["一市", "二市", "三重"])
+    if st.sidebar.checkbox(m, value=default_active, key=f"m_{m}"):
         selected_markets.append(m)
 
 st.sidebar.markdown("---")
@@ -112,7 +114,7 @@ if not df.empty:
     c_d1, c_d2 = st.columns(2)
     with c_d1:
         max_dt = df['日期'].max()
-        date_range = st.date_input("📅 日期區間", value=[max_dt, max_dt])
+        date_range = st.date_input("📅 選擇日期區間", value=[max_dt, max_dt])
     with c_d2: s_buy = st.text_input("👤 買家搜尋")
 
     # 過濾
@@ -120,7 +122,7 @@ if not df.empty:
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
         f_df = f_df[(f_df['日期'] >= date_range[0]) & (f_df['日期'] <= date_range[1])]
     
-    # 小代過濾 (確保拼字正確)
+    # 小代過濾
     if fav_subs or s_sub:
         if fav_subs and not s_sub: f_df = f_df[f_df['小代'].isin(fav_subs)]
         elif s_sub and not fav_subs: f_df = f_df[f_df['小代'].str.contains(s_sub)]
@@ -142,7 +144,7 @@ if not df.empty:
     
     st.dataframe(f_df[disp_cols].rename(columns={"顯示日期":"日期"}), use_container_width=True, height=400, hide_index=True)
 
-    # --- 📊 區間行情彙總 (精簡字體) ---
+    # --- 📊 區間行情彙總 ---
     if not f_df.empty:
         st.divider()
         t_pcs, t_kg, t_val = int(f_df['件數'].sum()), int(f_df['公斤'].sum()), int(f_df['總價'].sum())
