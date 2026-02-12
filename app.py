@@ -71,19 +71,10 @@ df = fetch_data()
 # --- 側邊欄 ---
 st.sidebar.title("⚙️ 控制面板")
 
-# 修正後的全選市場邏輯
 st.sidebar.subheader("🏢 市場選擇")
-if "select_all" not in st.session_state:
-    st.session_state.select_all = False
-
-# 全選勾選框
-all_mkt = st.sidebar.checkbox("全選所有市場", key="all_mkt_checkbox")
-
 selected_markets = []
 for m in MARKET_ORDER:
-    # 邏輯：如果全選被勾起，則所有項目強制 True；否則恢復預設（一市、二市）
-    is_checked = True if all_mkt else (m in ["一市", "二市"])
-    if st.sidebar.checkbox(m, value=is_checked, key=f"m_{m}"):
+    if st.sidebar.checkbox(m, value=(m in ["一市", "二市"]), key=f"m_{m}"):
         selected_markets.append(m)
 
 st.sidebar.markdown("---")
@@ -101,7 +92,8 @@ if not df.empty:
     with c1: target_farm = st.selectbox("🏥 選擇農會", list(FARMER_MAP.keys()))
     with c2: 
         v_list = df[df['農會']==target_farm]['品種'].unique()
-        target_v = st.selectbox("🍐 選擇品種", [v for v in SORTED_V_NAMES if v in v_list] if v_list.any() else v_list)
+        v_options = [v for v in SORTED_V_NAMES if v in v_list]
+        target_v = st.selectbox("🍐 選擇品種", v_options if v_options else v_list)
     with c3: 
         sort_opt = st.selectbox("🔃 排序方式", ["價格：由高至低", "價格：由低至高", "日期：由新到舊", "日期：由舊至新"])
 
@@ -120,7 +112,7 @@ if not df.empty:
     c_d1, c_d2 = st.columns(2)
     with c_d1:
         max_dt = df['日期'].max()
-        date_range = st.date_input("📅 選擇日期區間", value=[max_dt, max_dt])
+        date_range = st.date_input("📅 日期區間", value=[max_dt, max_dt])
     with c_d2: s_buy = st.text_input("👤 買家搜尋")
 
     # 過濾
@@ -128,7 +120,7 @@ if not df.empty:
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
         f_df = f_df[(f_df['日期'] >= date_range[0]) & (f_df['日期'] <= date_range[1])]
     
-    # 小代過濾 (修正拼字錯誤)
+    # 小代過濾 (確保拼字正確)
     if fav_subs or s_sub:
         if fav_subs and not s_sub: f_df = f_df[f_df['小代'].isin(fav_subs)]
         elif s_sub and not fav_subs: f_df = f_df[f_df['小代'].str.contains(s_sub)]
@@ -150,7 +142,7 @@ if not df.empty:
     
     st.dataframe(f_df[disp_cols].rename(columns={"顯示日期":"日期"}), use_container_width=True, height=400, hide_index=True)
 
-    # --- 📊 行情彙總 (20px 字體) ---
+    # --- 📊 區間行情彙總 (精簡字體) ---
     if not f_df.empty:
         st.divider()
         t_pcs, t_kg, t_val = int(f_df['件數'].sum()), int(f_df['公斤'].sum()), int(f_df['總價'].sum())
